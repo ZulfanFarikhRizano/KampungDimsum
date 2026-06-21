@@ -422,6 +422,16 @@ function initMap(){
     // BUG FIX SEC-06: escape HTML di field teks sebelum dimasukkan ke popup innerHTML
     // Mencegah HTML injection jika data cabang suatu saat berasal dari API/database
     function _esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+    // BUG FIX: popup peta ini sebelumnya pakai c.mapsUrl mentah tanpa validasi scheme
+    // (beda dengan halaman publik yang sudah ada CRIT-3 fix) — bisa jadi link mati
+    // (tanpa protokol) atau celah javascript: URL kalau data datang dari API.
+    var _rawMapsPin = (c.mapsUrl||'').trim();
+    var safeMapsUrlPin = '#';
+    if(_rawMapsPin){
+      var _withProtoPin = /^https?:\/\//i.test(_rawMapsPin) ? _rawMapsPin
+        : (!/^[a-z][a-z0-9+.-]*:/i.test(_rawMapsPin) ? 'https://'+_rawMapsPin : '');
+      if(/^https:\/\//.test(_withProtoPin)) safeMapsUrlPin = _withProtoPin;
+    }
     marker.bindPopup(
       '<div style="padding:14px 16px;min-width:200px;font-family:sans-serif">'
       +'<div style="font-size:.65rem;color:#888;margin-bottom:3px">'+typeLabel+'</div>'
@@ -430,7 +440,7 @@ function initMap(){
       +'<div style="font-size:.74rem;color:#888;margin-bottom:8px;display:flex;align-items:center;gap:4px"><svg viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2" width="11" height="11" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>'+_esc(c.jam)+'</div>'
       +statusHtml
       +'<div style="display:flex;gap:6px;margin-top:6px">'
-      +'<a href="'+_esc(c.mapsUrl)+'" target="_blank" style="flex:1;display:flex;align-items:center;justify-content:center;gap:5px;background:#B83232;color:#fff;text-align:center;padding:7px 8px;border-radius:7px;font-size:.74rem;font-weight:600;text-decoration:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 00-8 8c0 5.4 7 12.5 7.3 12.8a1 1 0 001.4 0C13 22.5 20 15.4 20 10a8 8 0 00-8-8z"/></svg>Google Maps</a>'
+      +'<a href="'+safeMapsUrlPin+'" target="_blank" style="flex:1;display:flex;align-items:center;justify-content:center;gap:5px;background:#B83232;color:#fff;text-align:center;padding:7px 8px;border-radius:7px;font-size:.74rem;font-weight:600;text-decoration:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 00-8 8c0 5.4 7 12.5 7.3 12.8a1 1 0 001.4 0C13 22.5 20 15.4 20 10a8 8 0 00-8-8z"/></svg>Google Maps</a>'
       +'<a href="https://wa.me/'+_esc(c.wa)+'?text=Halo%20'+encodeURIComponent(c.name)+'%2C%20saya%20ingin%20bertanya..." target="_blank" style="flex:1;display:flex;align-items:center;justify-content:center;gap:5px;background:#22C55E;color:#fff;text-align:center;padding:7px 8px;border-radius:7px;font-size:.74rem;font-weight:600;text-decoration:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>WhatsApp</a>'
       +'</div>'
       +'</div>',

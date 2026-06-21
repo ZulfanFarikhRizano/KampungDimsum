@@ -1195,7 +1195,16 @@ function renderCabang(filter=''){
   var _cabHTML=items.map(c=>{
     // CRIT-3 FIX: validasi mapsUrl — hanya izinkan protokol https://
     // mencegah javascript: URL injection jika data cabang datang dari API
-    const safeMapsUrl = (c.mapsUrl && /^https:\/\//.test(c.mapsUrl)) ? c.mapsUrl : '#';
+    // BUG FIX: link tanpa protokol (mis. "maps.app.goo.gl/xxx" tanpa "https://")
+    // dulu langsung jadi '#' (link mati). Sekarang auto-tambah https:// dulu
+    // sebelum divalidasi, selama bukan scheme berbahaya seperti javascript:.
+    const _rawMaps = (c.mapsUrl||'').trim();
+    let safeMapsUrl = '#';
+    if(_rawMaps){
+      const _withProto = /^https?:\/\//i.test(_rawMaps) ? _rawMaps
+        : (!/^[a-z][a-z0-9+.-]*:/i.test(_rawMaps) ? 'https://'+_rawMaps : '');
+      if(/^https:\/\//.test(_withProto)) safeMapsUrl = _withProto;
+    }
     return `
     <div class="cabang-card">
       <div class="cabang-header">
@@ -1368,4 +1377,3 @@ function toggleFAQ(i){
     if(icon) icon.textContent='×';
   }
 }
-

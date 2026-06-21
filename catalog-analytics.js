@@ -576,9 +576,19 @@ function toggleAddCabang(){
         <div class="form-group"><label>Alamat</label><input type="text" id="cb-addr" class="login-input" style="margin:0;padding:9px 11px" placeholder="Jl. ..."></div>
         <div class="form-group"><label>Jam Buka</label><input type="text" id="cb-jam" class="login-input" style="margin:0;padding:9px 11px" placeholder="08.00–21.00"></div>
         <div class="form-group"><label>No WhatsApp</label><input type="text" id="cb-wa" class="login-input" style="margin:0;padding:9px 11px" placeholder="628xxx"></div>
-        <div class="form-group"><label>Link Google Maps</label><input type="text" id="cb-maps" class="login-input" style="margin:0;padding:9px 11px" placeholder="https://maps.app.goo.gl/..."></div>
+        <div class="form-group" style="grid-column:1/-1">
+          <label>Link Google Maps</label>
+          <div style="display:flex;gap:8px">
+            <input type="text" id="cb-maps" class="login-input" style="margin:0;padding:9px 11px;flex:1" placeholder="https://maps.app.goo.gl/...">
+            <button type="button" class="btn-save" style="white-space:nowrap;padding:9px 14px" onclick="cbResolveMaps()" id="cb-resolve-btn">📍 Ambil Koordinat</button>
+          </div>
+          <div style="font-size:.71rem;color:var(--text4);margin-top:4px" id="cb-resolve-hint">Tempel link Google Maps di atas, lalu klik "Ambil Koordinat" — Latitude/Longitude di bawah akan otomatis terisi. Kalau gagal, isi manual saja.</div>
+        </div>
+        <div class="form-group"><label>Latitude</label><input type="text" id="cb-lat" class="login-input" style="margin:0;padding:9px 11px" placeholder="-6.425067"></div>
+        <div class="form-group"><label>Longitude</label><input type="text" id="cb-lng" class="login-input" style="margin:0;padding:9px 11px" placeholder="106.742754"></div>
         <div class="form-group"><label>Tipe</label><select id="cb-type" class="login-input" style="margin:0;padding:9px 11px"><option value="cabang">Cabang</option><option value="agen">Agen</option><option value="produksi">Rumah Produksi</option></select></div>
       </div>
+      <div style="font-size:.71rem;color:var(--text4);margin:-6px 0 12px">Cara manual (kalau tombol "Ambil Koordinat" gagal): buka Google Maps di HP → tap-lama lokasi cabang → koordinat muncul di kotak pencarian, copy ke field Latitude/Longitude (tanpa koordinat, pin tidak akan tampil di peta)</div>
       <div style="display:flex;gap:9px">
         <button class="btn-save" onclick="saveCabang()">Simpan</button>
         <button class="btn-danger" onclick="toggleAddCabang()">Batal</button>
@@ -589,8 +599,45 @@ function toggleAddCabang(){
   }
   f.style.display=cabangFormOpen?'block':'none';
   if(cabangFormOpen&&document.getElementById('cb-edit-idx').value==='-1'){
-    ['cb-nama','cb-addr','cb-jam','cb-wa','cb-maps'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+    ['cb-nama','cb-addr','cb-jam','cb-wa','cb-maps','cb-lat','cb-lng'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
     document.getElementById('cb-type').value='cabang';
+    const _h=document.getElementById('cb-resolve-hint');
+    if(_h) _h.textContent='Tempel link Google Maps di atas, lalu klik "Ambil Koordinat" — Latitude/Longitude di bawah akan otomatis terisi. Kalau gagal, isi manual saja.';
+  }
+}
+
+// Ambil koordinat dari link Google Maps (termasuk link pendek maps.app.goo.gl/...)
+// dengan follow redirect di server (lihat api/resolve-maps.js), lalu isi otomatis
+// ke field Latitude/Longitude. Kalau gagal, admin tetap bisa isi manual.
+async function cbResolveMaps(){
+  const mapsInput = document.getElementById('cb-maps');
+  const btn = document.getElementById('cb-resolve-btn');
+  const hint = document.getElementById('cb-resolve-hint');
+  const link = mapsInput ? mapsInput.value.trim() : '';
+  if(!link){ showToast('Isi link Google Maps dulu','error'); return; }
+
+  const origLabel = btn ? btn.textContent : '';
+  if(btn){ btn.disabled=true; btn.textContent='Memproses...'; }
+  if(hint){ hint.textContent='Sedang mengambil koordinat dari link...'; }
+
+  try{
+    const resp = await fetch('/api/resolve-maps?url='+encodeURIComponent(link));
+    const data = await resp.json();
+    if(!resp.ok || !data || typeof data.lat !== 'number' || typeof data.lng !== 'number'){
+      showToast(data?.error || 'Koordinat tidak ditemukan dari link ini, isi manual saja','error');
+      if(hint) hint.textContent = 'Gagal ambil otomatis — isi manual: buka Google Maps di HP → tap-lama lokasi → copy koordinat ke field di bawah.';
+      return;
+    }
+    document.getElementById('cb-lat').value = data.lat;
+    document.getElementById('cb-lng').value = data.lng;
+    showToast('Koordinat berhasil diambil: '+data.lat+', '+data.lng,'success');
+    if(hint) hint.textContent = 'Koordinat otomatis terisi dari link. Cek sekali lagi titik pin-nya nanti di peta.';
+  }catch(e){
+    console.warn('[KD] cbResolveMaps error:', e.message);
+    showToast('Gagal menghubungi server, isi koordinat manual saja','error');
+    if(hint) hint.textContent = 'Gagal ambil otomatis — isi manual: buka Google Maps di HP → tap-lama lokasi → copy koordinat ke field di bawah.';
+  }finally{
+    if(btn){ btn.disabled=false; btn.textContent=origLabel; }
   }
 }
 
@@ -599,12 +646,31 @@ function saveCabang(){
   const addr=document.getElementById('cb-addr').value.trim();
   const editIdx=parseInt(document.getElementById('cb-edit-idx').value);
   if(!nama||!addr){showToast('Nama dan alamat wajib diisi!','error');return;}
+
+  // BUG FIX: lat/lng dulu selalu di-hardcode 0,0 → pin tidak pernah muncul di peta.
+  // Sekarang dibaca dari field Latitude/Longitude di form.
+  const latRaw=document.getElementById('cb-lat').value.trim();
+  const lngRaw=document.getElementById('cb-lng').value.trim();
+  const lat=parseFloat(latRaw.replace(',','.'));
+  const lng=parseFloat(lngRaw.replace(',','.'));
+  if((latRaw||lngRaw) && (isNaN(lat)||isNaN(lng))){
+    showToast('Latitude/Longitude tidak valid — pakai format angka, mis: -6.425067','error'); return;
+  }
+  if(isNaN(lat)||isNaN(lng)){
+    showToast('Latitude & Longitude kosong — cabang akan tersimpan tapi pin TIDAK akan muncul di peta','error');
+  }
+
+  // BUG FIX: link Maps yang tidak diawali "https://" (mis. tempel tanpa protokol, atau ada spasi)
+  // membuat tombol "Google Maps" jadi link mati. Normalisasi di sini, bukan cuma saat render.
+  let mapsUrl=document.getElementById('cb-maps').value.trim();
+  if(mapsUrl && !/^https?:\/\//i.test(mapsUrl)) mapsUrl='https://'+mapsUrl;
+
   const obj={
     name:nama,addr:addr,
     jam:document.getElementById('cb-jam').value||'08.00–21.00',
     rating:5,wa:document.getElementById('cb-wa').value||'6285133355583',
-    open:true,lat:0,lng:0,
-    mapsUrl:document.getElementById('cb-maps').value||'',
+    open:true,lat:isNaN(lat)?0:lat,lng:isNaN(lng)?0:lng,
+    mapsUrl:mapsUrl,
     type:document.getElementById('cb-type').value||'cabang'
   };
   // FIX: simpan nama LAMA sebelum Object.assign agar WHERE clause Supabase pakai nama lama
@@ -665,6 +731,8 @@ function editCabang(idx){
     document.getElementById('cb-jam').value=c.jam;
     document.getElementById('cb-wa').value=c.wa;
     document.getElementById('cb-maps').value=c.mapsUrl||'';
+    document.getElementById('cb-lat').value=c.lat||'';
+    document.getElementById('cb-lng').value=c.lng||'';
     document.getElementById('cb-type').value=c.type||'cabang';
     const fh=document.getElementById('cb-form-title');if(fh)fh.textContent='Edit Cabang: '+c.name;
     document.getElementById('add-cabang-form').scrollIntoView({behavior:'smooth',block:'nearest'});
