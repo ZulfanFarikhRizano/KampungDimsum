@@ -1089,18 +1089,10 @@ function initAnalitikCharts(){
     chartInstances['chart-growth']=new Chart(cg,{type:'line',data:{labels:growthLabels,datasets:[{label:'Pertumbuhan %',data:growthData,borderColor:'#3A9E6E',backgroundColor:'rgba(58,158,110,.08)',tension:.4,fill:true,pointRadius:6,pointBackgroundColor:'#3A9E6E',pointBorderColor:'#fff',pointBorderWidth:2,spanGaps:false}]},options:{responsive:true,plugins:{legend:{display:false},tooltip:{backgroundColor:'rgba(26,16,8,.88)',titleColor:'rgba(255,255,255,.9)',bodyColor:'rgba(255,255,255,.7)',borderColor:'rgba(58,158,110,.35)',borderWidth:1,padding:10,cornerRadius:8,callbacks:{label:ctx=>ctx.raw!==null?ctx.raw+'%':'Belum cukup data'}}},scales:{x:{ticks:{color:th.text,font:{size:10,family:'DM Sans'}},grid:{color:th.grid}},y:{ticks:{color:th.text,font:{size:10,family:'DM Sans'},callback:v=>v+'%'},grid:{color:th.grid}}}}});
   }
 
-  // ── chart-payment: real data dari penjualanData ──
-  const cpay=document.getElementById('chart-payment');
-  if(cpay){
-    if(chartInstances['chart-payment']) chartInstances['chart-payment'].destroy();
-    const palette=['#B83232','#D4963A','#4E7FC4','#3A9E6E','#C4704E','#7B5FC4'];
-    const payCount={};
-    penjualanData.forEach(p=>{ if(p.bayar) payCount[p.bayar]=(payCount[p.bayar]||0)+1; });
-    const payEntries=Object.entries(payCount).sort((a,b)=>b[1]-a[1]);
-    const payLabels=payEntries.length?payEntries.map(([n])=>n):['Belum ada data'];
-    const payData=payEntries.length?payEntries.map(([,v])=>v):[1];
-    chartInstances['chart-payment']=new Chart(cpay,{type:'doughnut',data:{labels:payLabels,datasets:[{data:payData,backgroundColor:payEntries.length?palette.slice(0,payLabels.length):['rgba(200,200,200,.3)'],borderWidth:0,hoverOffset:6}]},options:{responsive:true,cutout:'58%',plugins:{legend:{labels:{color:th.text,font:{size:10,family:'DM Sans'},boxWidth:10,padding:8,usePointStyle:true,pointStyle:'circle'}},tooltip:{backgroundColor:'rgba(26,16,8,.88)',titleColor:'rgba(255,255,255,.9)',bodyColor:'rgba(255,255,255,.7)',borderColor:'rgba(184,50,50,.35)',borderWidth:1,padding:10,cornerRadius:8}}}});
-  }
+  // NOTE: blok chart-payment dihapus dari sini — canvas #chart-payment adalah
+  // milik panel Dashboard (initCharts/_refreshPaymentChart), bukan panel Analitik.
+  // Panel Analitik menampilkan data pembayaran via grid angka (renderAnalitikKPICards),
+  // jadi tidak perlu (dan tidak boleh) membuat Chart baru di canvas tersebut di sini.
 }
 // ============================================================
 // v70 — TIMEFRAME ENGINE: filter 1D / 1W / 1M / 1Y
@@ -1250,7 +1242,7 @@ function _refreshProdukChart(){
   subset.forEach(p=>{(p.items||[]).forEach(item=>{ menuCount[item.name]=(menuCount[item.name]||0)+item.qty; });});
   const top = Object.entries(menuCount).sort((a,b)=>b[1]-a[1]).slice(0,6);
   const palette = ['#B83232','#D4963A','#4E7FC4','#3A9E6E','#C4704E','#7B5FC4'];
-  ch.data.labels = top.length ? top.map(([n])=>n.replace(/\s*\d+\s*Pcs/i,' Pcs').trim()) : ['Belum ada data'];
+  ch.data.labels = top.length ? top.map(([n])=>n) : ['Belum ada data'];
   ch.data.datasets[0].data = top.length ? top.map(([,v])=>v) : [0];
   ch.data.datasets[0].backgroundColor = palette.slice(0,Math.max(top.length,1));
   ch.update('none');
@@ -1483,4 +1475,3 @@ function _stopRealtimeChart(){
   const wrap = document.getElementById('chart-realtime-wrap');
   if(wrap) wrap.style.display = 'none';
 }
-
