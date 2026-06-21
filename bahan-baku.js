@@ -289,11 +289,11 @@ function bbRenderItems(){
         + '<div style="padding:8px 12px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:end">'
           + '<div style="flex:2;min-width:140px">'
             + '<label style="font-size:.65rem;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:5px">Jumlah</label>'
-            + '<div style="display:flex;align-items:center;border:1.5px solid var(--border2);border-radius:11px;background:var(--bg);overflow:hidden;height:44px">'
-              + '<button onclick="bbItemQtyChange('+i+',-1)" style="width:44px;height:44px;border:none;background:none;font-size:1.1rem;font-weight:700;cursor:pointer;color:var(--text3);flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:background .15s" onmousedown="this.style.background=\'var(--bg2)\'" onmouseup="this.style.background=\'none\'">−</button>'
+            + '<div style="display:flex;align-items:center;gap:6px;border:1.5px solid var(--border2);border-radius:11px;background:var(--bg);overflow:hidden;height:44px;padding:4px;box-sizing:border-box">'
+              + '<button onclick="bbItemQtyChange('+i+',-1)" style="width:36px;height:36px;border:none;border-radius:8px;background:var(--bg2);font-size:1.1rem;font-weight:700;cursor:pointer;color:var(--text2);flex-shrink:0;display:flex;align-items:center;justify-content:center">−</button>'
               + '<input id="bb-qty-'+i+'" type="number" min="0.01" step="0.01" value="'+item.qty+'" oninput="_bbItems['+i+'].qty=Math.max(0,parseFloat(this.value)||0);bbUpdateItemSubtotal('+i+')" '
                 + 'style="flex:1;min-width:0;text-align:center;border:none;background:none;font-size:.95rem;font-weight:800;color:var(--red);padding:0;outline:none;font-family:inherit">'
-              + '<button onclick="bbItemQtyChange('+i+',1)" style="width:44px;height:44px;border:none;background:none;font-size:1.1rem;font-weight:700;cursor:pointer;color:var(--red);flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:background .15s" onmousedown="this.style.background=\'var(--bg2)\'" onmouseup="this.style.background=\'none\'">+</button>'
+              + '<button onclick="bbItemQtyChange('+i+',1)" style="width:36px;height:36px;border:none;border-radius:8px;background:rgba(220,38,38,.12);font-size:1.1rem;font-weight:700;cursor:pointer;color:var(--red);flex-shrink:0;display:flex;align-items:center;justify-content:center">+</button>'
             + '</div>'
           + '</div>'
           + '<div style="flex:1;min-width:110px">'
@@ -537,9 +537,10 @@ function bbRenderTable(){
       }catch(e){ return r.tanggal || '—'; }
     })();
 
-    var itemsHtml = (r.items||[]).map(function(it){
+    var itemsHtml = (r.items||[]).map(function(it, ii){
       var sub = (it.qty||0) * (it.harga||0);
-      return '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px dashed var(--border)">'
+      var isLast = ii === (r.items||[]).length - 1;
+      return '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:6px 0;'+(isLast?'':'border-bottom:1px dashed var(--border)')+'">'
         + '<div style="min-width:0">'
           + '<span style="font-size:.82rem;font-weight:600;color:var(--text)">'+_esc(it.nama||'—')+'</span>'
           + '<span style="font-size:.72rem;color:var(--text3);margin-left:6px">'+it.qty+' '+_esc(it.satuan||'')+'</span>'
@@ -554,9 +555,9 @@ function bbRenderTable(){
     // Badge warna cabang — otomatis konsisten untuk cabang apapun (lihat _bbCabangColor)
     var cColor = _bbCabangColor(r.cabang);
 
-    return '<div style="border-bottom:1px solid var(--border)">'
+    return '<div style="background:var(--bg);border:1.5px solid var(--border2);border-radius:16px;overflow:hidden;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,.04)">'
       // ── card header ──
-      + '<div style="padding:12px 16px 10px;display:flex;align-items:flex-start;justify-content:space-between;gap:10px">'
+      + '<div style="padding:12px 16px;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;background:var(--bg2);border-bottom:1px solid var(--border)">'
         + '<div>'
           + '<div style="display:flex;align-items:center;gap:7px;margin-bottom:3px">'
             + '<span style="width:8px;height:8px;border-radius:50%;background:'+cColor+';flex-shrink:0;display:inline-block"></span>'
@@ -570,7 +571,7 @@ function bbRenderTable(){
         + '</div>'
       + '</div>'
       // ── items ──
-      + '<div style="padding:0 16px 10px">'
+      + '<div style="padding:10px 16px 6px">'
         + itemsHtml
       + '</div>'
       // ── footer meta ──
@@ -742,10 +743,10 @@ function bbProdRenderItems(){
           + selectedOpts
         + '</select>'
         + '<div style="display:flex;align-items:center;gap:8px">'
-          + '<div style="display:flex;align-items:center;border:1.5px solid var(--border2);border-radius:9px;background:var(--bg);overflow:hidden;height:40px;flex:1">'
-            + '<button onclick="var n=parseInt(document.getElementById(\'bb-pq-'+i+'\').value||0);n=Math.max(0,n-1);document.getElementById(\'bb-pq-'+i+'\').value=n;_bbProdItems['+i+'].qty=n;bbProdUpdateTotal()" style="width:44px;height:100%;border:none;background:transparent;cursor:pointer;color:var(--text3);font-size:1.2rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">−</button>'
-            + '<input id="bb-pq-'+i+'" type="number" min="0" inputmode="numeric" value="'+item.qty+'" oninput="_bbProdItems['+i+'].qty=parseInt(this.value)||0;bbProdUpdateTotal()" style="flex:1;text-align:center;border:none;background:transparent;font-size:1rem;font-weight:800;color:var(--red,#dc2626);outline:none;font-family:inherit;padding:0;-moz-appearance:textfield;-webkit-appearance:none" />'
-            + '<button onclick="var n=parseInt(document.getElementById(\'bb-pq-'+i+'\').value||0)+1;document.getElementById(\'bb-pq-'+i+'\').value=n;_bbProdItems['+i+'].qty=n;bbProdUpdateTotal()" style="width:44px;height:100%;border:none;background:transparent;cursor:pointer;color:var(--red,#dc2626);font-size:1.2rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">+</button>'
+          + '<div style="display:flex;align-items:center;gap:6px;border:1.5px solid var(--border2);border-radius:9px;background:var(--bg);overflow:hidden;height:44px;padding:4px;flex:1;box-sizing:border-box">'
+            + '<button onclick="var n=parseInt(document.getElementById(\'bb-pq-'+i+'\').value||0);n=Math.max(0,n-1);document.getElementById(\'bb-pq-'+i+'\').value=n;_bbProdItems['+i+'].qty=n;bbProdUpdateTotal()" style="width:36px;height:36px;border:none;border-radius:8px;background:var(--bg2);cursor:pointer;color:var(--text2);font-size:1.15rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">−</button>'
+            + '<input id="bb-pq-'+i+'" type="number" min="0" inputmode="numeric" value="'+item.qty+'" oninput="_bbProdItems['+i+'].qty=parseInt(this.value)||0;bbProdUpdateTotal()" style="flex:1;min-width:0;text-align:center;border:none;background:transparent;font-size:1rem;font-weight:800;color:var(--red,#dc2626);outline:none;font-family:inherit;padding:0;-moz-appearance:textfield;-webkit-appearance:none" />'
+            + '<button onclick="var n=parseInt(document.getElementById(\'bb-pq-'+i+'\').value||0)+1;document.getElementById(\'bb-pq-'+i+'\').value=n;_bbProdItems['+i+'].qty=n;bbProdUpdateTotal()" style="width:36px;height:36px;border:none;border-radius:8px;background:rgba(220,38,38,.12);cursor:pointer;color:var(--red,#dc2626);font-size:1.15rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">+</button>'
           + '</div>'
           + '<span style="font-size:.82rem;color:var(--text3);font-weight:600;flex-shrink:0">pcs</span>'
         + '</div>'
