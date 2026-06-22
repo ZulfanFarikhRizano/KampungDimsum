@@ -1067,104 +1067,145 @@ function renderDashboardForRole(){
 
   } else {
     // ── ADMIN/STAFF KEDAI: hanya data cabang sendiri + laporan harian ──
-    // Sembunyikan SA today card
+    // v140 FIX 2: KPI Bulanan + histori per bulan
     const saTodayCard = document.getElementById('kpi-sa-today-card');
     if(saTodayCard) saTodayCard.style.display = 'none';
     _stopSaClock();
-    const myData = omsetHistory.filter(o=>o.cabang===myCabang);
-    const todayData = penjualanData.filter(p=>p.cabang===myCabang && p.tanggal.slice(0,10)===today);
-    const totalOmsetKedai = myData.reduce((s,o)=>s+o.omset,0);
-    const totalTrxKedai = myData.reduce((s,o)=>s+o.trx,0);
-    const topStok = _invGetTopTotal(myCabang);
-    const oriStok = _invGet(myCabang,'Dimsum Original');
-    const totalOmsetHari = todayData.reduce((s,p)=>s+p.total,0);
+    _stopRealtimeClock();
+
+    // FIX v140: filter bulan INI untuk KPI bulanan (bukan all-time)
+    var nowKedai = new Date();
+    var thisMonPrefixKedai = nowKedai.getFullYear() + '-' + String(nowKedai.getMonth()+1).padStart(2,'0');
+
+    var myBulanData = omsetHistory.filter(function(o){
+      return o.cabang === myCabang && o.tanggal && o.tanggal.startsWith(thisMonPrefixKedai);
+    });
+    var todayData = penjualanData.filter(function(p){
+      return p.cabang === myCabang && p.tanggal && p.tanggal.slice(0,10) === today;
+    });
+
+    var totalOmsetBulan = myBulanData.reduce(function(s,o){ return s + o.omset; }, 0);
+    var totalTrxBulan   = myBulanData.reduce(function(s,o){ return s + o.trx;  }, 0);
+    var totalOmsetHari  = todayData.reduce(function(s,p){ return s + p.total; }, 0);
+    var topStok  = _invGetTopTotal(myCabang);
+    var oriStok  = _invGet(myCabang,'Dimsum Original');
+    var kejuStok = _invGet(myCabang,'Dimsum Keju');
 
     var omsetChgKedai = _calcOmsetChange(myCabang);
-    // v62: Ganti KPI omset ke real-time "Omset Hari Ini"
-    const lastTrx = todayData.length ? todayData[0].tanggal.slice(11,16) : null;
-    const realtimeSub = todayData.length
-      ? todayData.length + ' transaksi · terakhir ' + (lastTrx||'—')
-      : 'Belum ada transaksi hari ini';
-    _setKPI('kpi-omset','Rp '+_fmtJuta(totalOmsetHari), realtimeSub, todayData.length?'up':'', 'kpi-omset-label', 'Omset Hari Ini');
-    // Show clock element
-    const clockEl = document.getElementById('kpi-omset-clock');
-    if(clockEl) clockEl.style.display = '';
-    // v62: Start live clock for admin/staff
-    _startRealtimeClock();
+
+    // KPI 1: Omset Bulan Ini
+    _setKPI('kpi-omset',
+      'Rp '+_fmtJuta(totalOmsetBulan),
+      totalTrxBulan+' trx · '+(omsetChgKedai.text||'—'),
+      totalOmsetBulan>0?'up':'',
+      'kpi-omset-label','Omset Bulan Ini'
+    );
+    var clockEl = document.getElementById('kpi-omset-clock');
+    if(clockEl) clockEl.style.display = 'none';
+
+    // KPI 2: Stok Topping
     _setKPI('kpi-cabang',topStok.toLocaleString('id-ID')||'0','kemasan tersedia','','kpi-cabang-label','Stok Topping');
-    const kejuStok = _invGet(myCabang,'Dimsum Keju');
-    const oriTotal = oriStok + kejuStok;
+
+    // KPI 3: Stok Bahan Baku
+    var oriTotal = oriStok + kejuStok;
     _setKPI('kpi-trx',oriTotal.toLocaleString('id-ID')||'0','Ori '+oriStok+' · Keju '+kejuStok,'','kpi-trx-label','Stok Bahan Baku');
-    _setKPI('kpi-stok',todayData.length.toLocaleString('id-ID'),'transaksi hari ini','','kpi-stok-label','Trx Hari Ini');
 
-    // Performa table hanya satu cabang
-    const tp=document.getElementById('tbl-performa');
-    const perfTitle=document.getElementById('tbl-performa-title');
-    if(perfTitle) perfTitle.textContent='Histori Omset — '+myCabang;
-    if(tp)tp.innerHTML=`<thead><tr><th>Tanggal</th><th>Omset</th><th>Transaksi</th></tr></thead><tbody>${
-      myData.slice(0,10).map(o=>`<tr><td style="color:var(--text3)">${o.tanggal}</td><td style="color:var(--red);font-weight:600">Rp ${o.omset.toLocaleString('id-ID')}</td><td>${o.trx}</td></tr>`).join('')
-      || '<tr class="tbl-empty"><td colspan="3">Belum ada data omset</td></tr>'
-    }</tbody>`;
+    // KPI 4: Omset Hari Ini
+    _setKPI('kpi-stok',
+      'Rp '+_fmtJuta(totalOmsetHari),
+      todayData.length+' transaksi hari ini',
+      todayData.length?'up':'',
+      'kpi-stok-label','Omset Hari Ini'
+    );
 
-    // ── Laporan Harian ──
+    // Tabel histori omset bulanan
+    const tp = document.getElementById('tbl-performa');
+    const perfTitle = document.getElementById('tbl-performa-title');
+    if(perfTitle) perfTitle.textContent = 'Histori Omset Bulanan — '+myCabang;
+    if(tp){
+      var byMonth = {};
+      omsetHistory.filter(function(o){ return o.cabang===myCabang && o.tanggal; }).forEach(function(o){
+        var mon = o.tanggal.slice(0,7);
+        if(!byMonth[mon]) byMonth[mon]={omset:0,trx:0};
+        byMonth[mon].omset += o.omset;
+        byMonth[mon].trx   += o.trx;
+      });
+      var months = Object.keys(byMonth).sort().reverse().slice(0,6);
+      tp.innerHTML = '<thead><tr><th>Bulan</th><th class="th-right">Omset</th><th class="th-center">Trx</th><th class="th-right">Avg/Trx</th></tr></thead><tbody>'
+        + (months.length ? months.map(function(m){
+            var d = byMonth[m];
+            var avg = d.trx>0 ? Math.round(d.omset/d.trx) : 0;
+            var label = new Date(m+'-01').toLocaleDateString('id-ID',{month:'long',year:'numeric'});
+            var isThisMon = m === thisMonPrefixKedai;
+            return '<tr style="'+(isThisMon?'background:rgba(184,50,50,.05)':'')+'">'
+              + '<td style="color:var(--text'+(isThisMon?'':3)+');font-weight:'+(isThisMon?700:400)+'">'+label+(isThisMon?' <span style="font-size:.65rem;color:var(--red);font-weight:700">bulan ini</span>':'')+'</td>'
+              + '<td class="td-num" style="color:var(--red);font-weight:600">Rp '+d.omset.toLocaleString('id-ID')+'</td>'
+              + '<td class="td-center">'+d.trx+'</td>'
+              + '<td class="td-num" style="color:var(--text3)">'+(avg>0?'Rp '+avg.toLocaleString('id-ID'):'—')+'</td>'
+              + '</tr>';
+          }).join('')
+          : '<tr class="tbl-empty"><td colspan="4">Belum ada data omset</td></tr>'
+        ) + '</tbody>';
+    }
+
     const dr = document.getElementById('daily-report-wrap');
-    if(dr) dr.style.display='block';
-
-    // Sembunyikan grafik analitik total (hanya superadmin yang boleh lihat)
+    if(dr) dr.style.display = 'block';
     const cw = document.getElementById('dashboard-charts-wrap');
-    if(cw) cw.style.display='none';
+    if(cw) cw.style.display = 'none';
     const hw = document.getElementById('chart-harian-wrap');
-    if(hw) hw.style.display='none';
-    // v65: Tampilkan chart real-time untuk admin/staff
+    if(hw) hw.style.display = 'none';
     _startRealtimeChart();
+
     const drDate = document.getElementById('daily-report-date');
     if(drDate) drDate.textContent = new Date().toLocaleDateString('id-ID',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
 
     const tdr = document.getElementById('tbl-daily-report');
     if(tdr){
-      tdr.innerHTML = `<thead><tr><th>Waktu</th><th>Pelanggan</th><th>No. HP</th><th class="th-center">Pembayaran</th><th>Item</th><th class="th-right">Total</th></tr></thead><tbody>${
-        todayData.length ? todayData.map(p=>`<tr>
-          <td style="font-size:.75rem;color:var(--text3)">${p.tanggal.slice(11,16)||'—'}</td>
-          <td>${p.pelanggan}</td>
-          <td style="font-size:.75rem;color:var(--text3)">${p.phone||'—'}</td>
-          <td><span class="td-badge badge-open">${p.bayar}</span></td>
-          <td style="font-size:.75rem;color:var(--text3)">${Array.isArray(p.items)?p.items.map(i=>_esc(i.name)+' x'+i.qty).join(', '):(p.items||'\u2014')}</td>
-          <td class="td-num" style="color:var(--red);font-weight:700">Rp ${p.total.toLocaleString('id-ID')}</td>
-        </tr>`).join('')
-        : '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text4)">Belum ada transaksi hari ini — input di menu Penjualan</td></tr>'
-      }</tbody>`;
+      tdr.innerHTML = '<thead><tr><th>Waktu</th><th>Pelanggan</th><th>No. HP</th><th class="th-center">Pembayaran</th><th>Item</th><th class="th-right">Total</th></tr></thead><tbody>'
+        + (todayData.length ? todayData.map(function(p){
+            return '<tr>'
+              + '<td style="font-size:.75rem;color:var(--text3)">'+( p.tanggal.slice(11,16)||'—')+'</td>'
+              + '<td>'+_esc(p.pelanggan)+'</td>'
+              + '<td style="font-size:.75rem;color:var(--text3)">'+(p.phone||'—')+'</td>'
+              + '<td><span class="td-badge badge-open">'+_esc(p.bayar)+'</span></td>'
+              + '<td style="font-size:.75rem;color:var(--text3)">'+(Array.isArray(p.items)?p.items.map(function(i){return _esc(i.name)+' x'+i.qty;}).join(', '):(p.items||'—'))+'</td>'
+              + '<td class="td-num" style="color:var(--red);font-weight:700">Rp '+p.total.toLocaleString('id-ID')+'</td>'
+              + '</tr>';
+          }).join('')
+          : '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text4)">Belum ada transaksi hari ini — input di menu Penjualan</td></tr>'
+        ) + '</tbody>';
     }
 
     const stokDetail = document.getElementById('daily-stok-detail');
-    if(stokDetail) stokDetail.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px">
-        <span style="font-size:.78rem;color:var(--text2);white-space:nowrap">Topping</span>
-        <span style="font-weight:800;font-size:1.1rem;font-family:'Inter',sans-serif;color:${topStok<50?'var(--red)':'var(--text)'};letter-spacing:-.02em;flex-shrink:0">${topStok} <span style="font-size:.68rem;font-weight:400;color:var(--text4)">kemasan</span></span>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-        <span style="font-size:.78rem;color:var(--text2);white-space:nowrap">Original</span>
-        <span style="font-weight:800;font-size:1.1rem;font-family:'Inter',sans-serif;color:${oriStok<100?'var(--red)':'var(--text)'};letter-spacing:-.02em;flex-shrink:0">${oriStok} <span style="font-size:.68rem;font-weight:400;color:var(--text4)">pcs</span></span>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:4px">
-        <span style="font-size:.78rem;color:var(--text2);white-space:nowrap">Keju</span>
-        <span style="font-weight:800;font-size:1.1rem;font-family:'Inter',sans-serif;color:${kejuStok<100?'var(--red)':'var(--text)'};letter-spacing:-.02em;flex-shrink:0">${kejuStok} <span style="font-size:.68rem;font-weight:400;color:var(--text4)">pcs</span></span>
-      </div>
-      ${(topStok<50||oriStok<100||kejuStok<100)?'<div style="margin-top:10px;font-size:.72rem;color:var(--red);font-weight:600;line-height:1.4;display:flex;align-items:center;gap:5px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Stok rendah — minta distribusi ke pusat</div>':''}`;
+    if(stokDetail) stokDetail.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px">'
+        +'<span style="font-size:.78rem;color:var(--text2);white-space:nowrap">Topping</span>'
+        +'<span style="font-weight:800;font-size:1.1rem;font-family:\'Inter\',sans-serif;color:'+( topStok<50?'var(--red)':'var(--text)')+'">'+topStok+' <span style="font-size:.68rem;font-weight:400;color:var(--text4)">kemasan</span></span>'
+      +'</div>'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
+        +'<span style="font-size:.78rem;color:var(--text2);white-space:nowrap">Original</span>'
+        +'<span style="font-weight:800;font-size:1.1rem;font-family:\'Inter\',sans-serif;color:'+(oriStok<100?'var(--red)':'var(--text)')+'">'+oriStok+' <span style="font-size:.68rem;font-weight:400;color:var(--text4)">pcs</span></span>'
+      +'</div>'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:4px">'
+        +'<span style="font-size:.78rem;color:var(--text2);white-space:nowrap">Keju</span>'
+        +'<span style="font-weight:800;font-size:1.1rem;font-family:\'Inter\',sans-serif;color:'+(kejuStok<100?'var(--red)':'var(--text)')+'">'+kejuStok+' <span style="font-size:.68rem;font-weight:400;color:var(--text4)">pcs</span></span>'
+      +'</div>'
+      +( (topStok<50||oriStok<100||kejuStok<100) ? '<div style="margin-top:10px;font-size:.72rem;color:var(--red);font-weight:600">⚠️ Stok rendah — minta distribusi ke pusat</div>' : '' );
 
     const summaryStats = document.getElementById('daily-summary-stats');
-    if(summaryStats) summaryStats.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px">
-        <span style="font-size:.78rem;color:var(--text2);white-space:nowrap">Jumlah Transaksi</span>
-        <span style="font-weight:800;font-size:1.1rem;font-family:'Inter',sans-serif;color:var(--text);letter-spacing:-.02em;flex-shrink:0">${todayData.length}</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px">
-        <span style="font-size:.78rem;color:var(--text2);white-space:nowrap">Omset Hari Ini</span>
-        <span style="font-weight:800;font-size:1rem;font-family:'Inter',sans-serif;color:var(--red);letter-spacing:-.02em;flex-shrink:0">Rp ${_fmtJuta(totalOmsetHari)}</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-        <span style="font-size:.78rem;color:var(--text2);white-space:nowrap">Rata-rata/Trx</span>
-        <span style="font-weight:700;font-size:.9rem;font-family:'Inter',sans-serif;color:var(--text);flex-shrink:0">${todayData.length ? 'Rp '+(Math.round(totalOmsetHari/todayData.length)).toLocaleString('id-ID') : '—'}</span>
-      </div>`;
+    if(summaryStats) summaryStats.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px">'
+        +'<span style="font-size:.78rem;color:var(--text2)">Trx Hari Ini</span>'
+        +'<span style="font-weight:800;font-size:1.1rem;color:var(--text)">'+todayData.length+'</span>'
+      +'</div>'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px">'
+        +'<span style="font-size:.78rem;color:var(--text2)">Omset Hari Ini</span>'
+        +'<span style="font-weight:800;font-size:1rem;color:var(--red)">Rp '+_fmtJuta(totalOmsetHari)+'</span>'
+      +'</div>'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
+        +'<span style="font-size:.78rem;color:var(--text2)">Omset Bulan Ini</span>'
+        +'<span style="font-weight:700;font-size:.9rem;color:var(--red)">Rp '+_fmtJuta(totalOmsetBulan)+'</span>'
+      +'</div>';
   }
 }
 
@@ -1272,4 +1313,3 @@ function _syncNavBubble(){
     if(firstVisible) moveBubbleTo(firstVisible, bubble);
   }
 }
-

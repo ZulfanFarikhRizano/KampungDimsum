@@ -316,29 +316,51 @@ function pjReset(){
 }
 
 function renderPenjualanTable(){
-  const tbl = document.getElementById('tbl-penjualan');
+  var tbl = document.getElementById('tbl-penjualan');
   if(!tbl) return;
-  const isSA = currentUserRole === 'superadmin';
-  if(!penjualanData.length){
-    tbl.innerHTML = '<tbody><tr class="tbl-empty"><td colspan="'+(isSA?9:8)+'">Belum ada transaksi</td></tr></tbody>';
+  var isSA = currentUserRole === 'superadmin';
+  var myCabang = window._currentAdmin
+    ? (window._currentAdmin.cabang_name || window._currentAdmin.cabang || '')
+    : '';
+
+  // FIX v140: Non-superadmin hanya lihat transaksi cabang sendiri
+  var visibleData = isSA
+    ? penjualanData
+    : penjualanData.filter(function(p){ return p.cabang === myCabang; });
+
+  if(!visibleData.length){
+    tbl.innerHTML = '<tbody><tr class="tbl-empty"><td colspan="'+(isSA?9:8)+'">'
+      + 'Belum ada transaksi' + (!isSA&&myCabang ? ' untuk '+myCabang : '')
+      + '</td></tr></tbody>';
     return;
   }
-  const hdDel = isSA ? '<th style="width:70px">Hapus</th>' : '';
-  // FIX v129 MEDIUM-01: hapus penjualan by order_id (stabil), bukan positional idx
-  // v135: kolom "Struk" — tombol cetak struk per transaksi (semua role, bukan hanya SA)
-  tbl.innerHTML = `<thead><tr><th>ID</th><th>Waktu</th><th>Cabang</th><th>Pelanggan</th><th class="th-center">Pembayaran</th><th>Item</th><th class="th-right">Total</th><th style="width:64px">Struk</th>${hdDel}</tr></thead><tbody>
-    ${penjualanData.map((p)=>`<tr>
-      <td style="font-size:.72rem;font-weight:600;color:var(--text4)">${_esc(p.id)}</td>
-      <td style="font-size:.76rem;color:var(--text3)">${_esc(p.tanggal.slice(11,16)||p.tanggal.slice(0,10))}</td>
-      <td style="font-size:.8rem">${_esc(p.cabang)}</td>
-      <td>${_esc(p.pelanggan)}</td>
-      <td><span class="td-badge badge-open">${_esc(p.bayar)}</span></td>
-      <td style="font-size:.75rem;color:var(--text3);max-width:140px">${Array.isArray(p.items)?p.items.map(i=>_esc(i.name)+' x'+i.qty).join(', '):(p.items||'\u2014')}</td>
-      <td class="td-num" style="color:var(--red);font-weight:700">Rp ${p.total.toLocaleString('id-ID')}</td>
-      <td><button class="btn-print-struk" onclick="pjPrintStruk('${_esc(p.id)}')" title="Cetak struk"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline-block;vertical-align:middle;width:1.1em;height:1.1em"><path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></svg></button></td>
-      ${isSA?`<td><button class="btn-sa-del" onclick="showDeletePenjualanById('${_escJsAttr(p.id)}','${_escJsAttr(p.tanggal.slice(0,16) + ' \u00b7 ' + p.cabang.replace('Kampung Dimsum ','KD ') + ' \u00b7 Rp ' + p.total.toLocaleString('id-ID'))}')">Hapus</button></td>`:''}
-    </tr>`).join('')}
-  </tbody>`;
+
+  var hdDel = isSA ? '<th style="width:70px">Hapus</th>' : '';
+  var rows = visibleData.map(function(p){
+    var itemStr = Array.isArray(p.items)
+      ? p.items.map(function(i){ return _esc(i.name)+' x'+i.qty; }).join(', ')
+      : (p.items||'\u2014');
+    return '<tr>'
+      + '<td style="font-size:.72rem;font-weight:600;color:var(--text4)">'+_esc(p.id)+'</td>'
+      + '<td style="font-size:.76rem;color:var(--text3)">'+_esc((p.tanggal||'').slice(11,16)||(p.tanggal||'').slice(0,10))+'</td>'
+      + '<td style="font-size:.8rem">'+_esc(p.cabang)+'</td>'
+      + '<td>'+_esc(p.pelanggan)+'</td>'
+      + '<td><span class="td-badge badge-open">'+_esc(p.bayar)+'</span></td>'
+      + '<td style="font-size:.75rem;color:var(--text3);max-width:140px">'+itemStr+'</td>'
+      + '<td class="td-num" style="color:var(--red);font-weight:700">Rp '+(p.total||0).toLocaleString('id-ID')+'</td>'
+      + '<td><button class="btn-print-struk" data-orderid="'+_esc(p.id)+'" onclick="pjPrintStruk(this.dataset.orderid)" title="Cetak struk">'
+          + '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline-block;vertical-align:middle;width:1.1em;height:1.1em"><path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></svg>'
+        + '</button></td>'
+      + (isSA ? '<td><button class="btn-sa-del" data-oid="'+_esc(p.id)+'" data-lbl="'+_esc((p.tanggal||'').slice(0,16)+' \u00b7 '+(p.cabang||'').replace('Kampung Dimsum ','KD ')+' \u00b7 Rp '+(p.total||0).toLocaleString('id-ID'))+'" onclick="showDeletePenjualanById(this.dataset.oid,this.dataset.lbl)">Hapus</button></td>' : '')
+      + '</tr>';
+  }).join('');
+
+  tbl.innerHTML = '<thead><tr>'
+    + '<th>ID</th><th>Waktu</th><th>Cabang</th><th>Pelanggan</th>'
+    + '<th class="th-center">Pembayaran</th><th>Item</th>'
+    + '<th class="th-right">Total</th><th style="width:64px">Struk</th>'
+    + hdDel
+    + '</tr></thead><tbody>' + rows + '</tbody>';
 }
 
 // ============ v135: CETAK STRUK (per transaksi, untuk printer kasir) ============

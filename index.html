@@ -3326,5 +3326,844 @@ CREATE POLICY "authenticated_all" ON produksi_bb FOR ALL USING (auth.role()='aut
 
 <script src="bahan-baku.js" defer></script>
 
+<!-- ═══════════════════════════════════════════════════════════════════
+     PATCH v140 — Inline override (dimuat SETELAH semua defer script)
+     1. Realtime WebSocket (Supabase Postgres Changes)
+     2. KPI Bulanan admin cabang (filter bulan ini, bukan all-time)
+     3. Isolasi transaksi per cabang (non-SA hanya lihat cabangnya)
+     4. Stok Gudang Bahan Baku (pembelian ↔ pemakaian produksi)
+     ═══════════════════════════════════════════════════════════════════
+     SQL MIGRATION v140 — jalankan di Supabase SQL Editor:
+
+     -- Tabel saldo stok bahan baku per gudang
+     CREATE TABLE IF NOT EXISTS stok_gudang_bb (
+       id BIGSERIAL PRIMARY KEY,
+       cabang TEXT NOT NULL,
+       nama_bahan TEXT NOT NULL,
+       satuan TEXT NOT NULL DEFAULT 'kg',
+       stok_tersedia NUMERIC DEFAULT 0,
+       updated_at TIMESTAMPTZ DEFAULT NOW(),
+       UNIQUE(cabang, nama_bahan)
+     );
+     ALTER TABLE stok_gudang_bb ENABLE ROW LEVEL SECURITY;
+     CREATE POLICY "public_read" ON stok_gudang_bb FOR SELECT USING (true);
+     CREATE POLICY "auth_write" ON stok_gudang_bb FOR ALL USING (auth.role()='authenticated');
+
+     -- Kolom bahan_dipakai di produksi_bb (sudah ada jika baru deploy)
+     ALTER TABLE produksi_bb ADD COLUMN IF NOT EXISTS bahan_dipakai JSONB DEFAULT '[]';
+
+     -- Enable Realtime (via Dashboard → Database → Replication → pilih tabel):
+     -- penjualan, omset_history, bahan_baku, produksi_bb, stok_gudang_bb
+     -- ATAU via SQL:
+     ALTER PUBLICATION supabase_realtime ADD TABLE penjualan;
+     ALTER PUBLICATION supabase_realtime ADD TABLE omset_history;
+     ALTER PUBLICATION supabase_realtime ADD TABLE bahan_baku;
+     ALTER PUBLICATION supabase_realtime ADD TABLE produksi_bb;
+     ALTER PUBLICATION supabase_realtime ADD TABLE stok_gudang_bb;
+-->
+<script>
+// ── Patch dijalankan setelah semua defer scripts selesai ──
+window.addEventListener('load', function() {
+  // Tunda sedikit agar semua defer scripts pasti sudah dieksekusi
+  setTimeout(_applyPatchV140, 800);
+});
+
+function _applyPatchV140() {
+
+/* ════════════════════════════════════════════════════════════════
+   FIX 1 — REALTIME WEBSOCKET SUPABASE
+   Subscribe ke perubahan DB → UI update otomatis tanpa refresh
+   ════════════════════════════════════════════════════════════════ */
+
+var _realtimeChannels = [];
+
+window._initRealtimeSubscriptions = function() {
+  var sb = (typeof getSB === 'function') ? getSB() : null;
+  if (!sb) { console.warn('[RT v140] getSB() null — skip realtime'); return; }
+
+  // Bersihkan subscription lama
+  _realtimeChannels.forEach(function(ch) {
+    try { sb.removeChannel(ch); } catch(e) {}
+  });
+  _realtimeChannels = [];
+
+  // ── Penjualan ──
+  var chPj = sb.channel('kd-rt-penjualan-v140')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'penjualan' },
+      function(payload) { _rtHandlePenjualan(payload); })
+    .subscribe(function(status) {
+      _setLiveIndicator(status === 'SUBSCRIBED');
+      console.log('[RT v140] penjualan:', status);
+    });
+  _realtimeChannels.push(chPj);
+
+  // ── Omset History ──
+  var chOm = sb.channel('kd-rt-omset-v140')
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'omset_history' },
+      function(payload) { _rtHandleOmset(payload); })
+    .subscribe();
+  _realtimeChannels.push(chOm);
+
+  // ── Bahan Baku ──
+  var chBB = sb.channel('kd-rt-bahanbaku-v140')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'bahan_baku' },
+      function(payload) {
+        var panelBB = document.getElementById('panel-bahan-baku');
+        if (panelBB && panelBB.classList.contains('active')) {
+          if (typeof bbLoadData === 'function') bbLoadData();
+        }
+      })
+    .subscribe();
+  _realtimeChannels.push(chBB);
+
+  // ── Stok Gudang Bahan Baku ──
+  var chSG = sb.channel('kd-rt-stokgudang-v140')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'stok_gudang_bb' },
+      function(payload) {
+        var panelBB = document.getElementById('panel-bahan-baku');
+        if (panelBB && panelBB.classList.contains('active')) {
+          if (typeof bbRenderStokGudang === 'function') bbRenderStokGudang();
+        }
+      })
+    .subscribe();
+  _realtimeChannels.push(chSG);
+
+  // ── Produksi Bahan Baku ──
+  var chProd = sb.channel('kd-rt-produksi-v140')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'produksi_bb' },
+      function(payload) {
+        var panelLP = document.getElementById('panel-laporan-produksi');
+        if (panelLP && panelLP.classList.contains('active')) {
+          if (typeof lpInit === 'function') lpInit();
+        }
+      })
+    .subscribe();
+  _realtimeChannels.push(chProd);
+
+  console.log('[RT v140] Subscribed to', _realtimeChannels.length, 'channels');
+};
+
+function _rtHandlePenjualan(payload) {
+  var isSA = (typeof currentUserRole !== 'undefined') && currentUserRole === 'superadmin';
+  var myCabang = (window._currentAdmin) ? (window._currentAdmin.cabang_name || window._currentAdmin.cabang || '') : '';
+
+  if (payload.eventType === 'INSERT') {
+    var r = payload.new;
+    var alreadyExists = (typeof penjualanData !== 'undefined') && penjualanData.some(function(p) {
+      return p.id === (r.order_id || String(r.id));
+    });
+    if (!alreadyExists) {
+      var items = [];
+      try { items = typeof r.items === 'string' ? JSON.parse(r.items) : (r.items || []); } catch(e) {}
+      var newTrx = {
+        id: r.order_id || String(r.id),
+        tanggal: r.tanggal || r.created_at || '',
+        cabang: r.cabang || '',
+        pelanggan: r.pelanggan || 'Pelanggan Umum',
+        phone: r.phone || '',
+        bayar: r.bayar || 'QRIS',
+        items: items,
+        total: r.total || 0
+      };
+      if (typeof penjualanData !== 'undefined') {
+        penjualanData.unshift(newTrx);
+        if (typeof _persistPenjualan === 'function') _persistPenjualan();
+      }
+      if (isSA || newTrx.cabang === myCabang) {
+        if (typeof renderPenjualanTable === 'function') renderPenjualanTable();
+        if (typeof renderDashboardForRole === 'function') renderDashboardForRole();
+        if (typeof _renderSaTodayKPI === 'function' && isSA) _renderSaTodayKPI();
+        if (typeof showToast === 'function') {
+          var _escT = typeof _esc === 'function' ? _esc : function(s){return String(s);};
+          showToast('🔔 Transaksi baru: ' + _escT(newTrx.pelanggan) + ' — Rp ' + (newTrx.total||0).toLocaleString('id-ID'), 'info');
+        }
+      }
+    }
+  } else if (payload.eventType === 'DELETE') {
+    var delId = payload.old ? (payload.old.order_id || String(payload.old.id)) : null;
+    if (delId && typeof penjualanData !== 'undefined') {
+      penjualanData = penjualanData.filter(function(p) { return p.id !== delId; });
+      if (typeof _persistPenjualan === 'function') _persistPenjualan();
+      if (typeof renderPenjualanTable === 'function') renderPenjualanTable();
+      if (typeof renderDashboardForRole === 'function') renderDashboardForRole();
+    }
+  }
+}
+
+function _rtHandleOmset(payload) {
+  if (payload.eventType !== 'INSERT') return;
+  var r = payload.new;
+  var alreadyExists = (typeof omsetHistory !== 'undefined') && omsetHistory.some(function(o) {
+    return o.order_id && r.order_id && o.order_id === r.order_id;
+  });
+  if (!alreadyExists && typeof omsetHistory !== 'undefined') {
+    omsetHistory.unshift({
+      tanggal: r.tanggal || '',
+      cabang:  r.cabang  || '',
+      omset:   r.omset   || 0,
+      trx:     r.trx     || 1,
+      source:  r.source  || 'penjualan',
+      order_id: r.order_id || ''
+    });
+    if (typeof _persistOmset === 'function') _persistOmset();
+    if (typeof renderDashboardForRole === 'function') renderDashboardForRole();
+    if (typeof _renderSaTodayKPI === 'function' && typeof currentUserRole !== 'undefined' && currentUserRole === 'superadmin') _renderSaTodayKPI();
+  }
+}
+
+function _setLiveIndicator(online) {
+  var dot = document.getElementById('live-dot');
+  var txt = document.getElementById('live-indicator-text');
+  if (dot) dot.style.background = online ? '#10b981' : '#f59e0b';
+  if (txt) txt.textContent = online ? 'Live' : 'Offline';
+}
+
+// Hook _initRealtimeSubscriptions ke _sbLoadAll atau _applyAdminProfile
+// Setiap kali user berhasil login / session restore, init realtime
+(function() {
+  // Override _applyAdminProfile untuk inject realtime init setelah data load
+  var _origApplyAdminProfile = window._applyAdminProfile;
+  if (typeof _origApplyAdminProfile === 'function') {
+    window._applyAdminProfile = function() {
+      _origApplyAdminProfile.apply(this, arguments);
+      // Tunda sampai _sbLoadAll selesai (biasanya 1-2 detik)
+      setTimeout(function() {
+        window._initRealtimeSubscriptions();
+      }, 2500);
+    };
+  } else {
+    // Fallback: coba init setelah 3 detik (page load)
+    setTimeout(function() {
+      if (typeof getSB === 'function' && getSB()) {
+        window._initRealtimeSubscriptions();
+      }
+    }, 3000);
+  }
+})();
+
+
+/* ════════════════════════════════════════════════════════════════
+   FIX 2 — KPI BULANAN ADMIN CABANG (filter bulan ini, bukan all-time)
+   Override renderDashboardForRole untuk blok else (admin/staff)
+   ════════════════════════════════════════════════════════════════ */
+
+// Patch renderDashboardForRole — inject di akhir agar override fungsi asli
+var _origRenderDashboard = window.renderDashboardForRole;
+window.renderDashboardForRole = function() {
+  // Untuk superadmin: jalankan fungsi asli (tidak perlu di-override)
+  if (typeof currentUserRole !== 'undefined' && currentUserRole === 'superadmin') {
+    if (typeof _origRenderDashboard === 'function') _origRenderDashboard.apply(this, arguments);
+    return;
+  }
+
+  // Untuk admin/staff: gunakan logika baru dengan KPI BULANAN yang benar
+  var myCabang = (window._currentAdmin) ? (window._currentAdmin.cabang_name || window._currentAdmin.cabang || '') : '';
+  if (!myCabang) {
+    // Cabang belum diketahui — jalankan fungsi asli sebagai fallback
+    if (typeof _origRenderDashboard === 'function') _origRenderDashboard.apply(this, arguments);
+    return;
+  }
+
+  // Panggil fungsi asli dulu untuk render struktur dasar (hide SA card, dll)
+  if (typeof _origRenderDashboard === 'function') {
+    try { _origRenderDashboard.apply(this, arguments); } catch(e) {}
+  }
+
+  // Sekarang perbaiki KPI dengan data bulanan yang benar
+  try {
+    var nowKedai = new Date();
+    var today = nowKedai.toISOString().slice(0, 10);
+    var thisMonPrefixKedai = nowKedai.getFullYear() + '-' + String(nowKedai.getMonth() + 1).padStart(2, '0');
+
+    // FIX: filter bulan INI (bukan all-time)
+    var myBulanData = (typeof omsetHistory !== 'undefined') ? omsetHistory.filter(function(o) {
+      return o.cabang === myCabang && o.tanggal && o.tanggal.startsWith(thisMonPrefixKedai);
+    }) : [];
+
+    var todayData = (typeof penjualanData !== 'undefined') ? penjualanData.filter(function(p) {
+      return p.cabang === myCabang && p.tanggal && p.tanggal.slice(0, 10) === today;
+    }) : [];
+
+    var totalOmsetBulan = myBulanData.reduce(function(s, o) { return s + (o.omset || 0); }, 0);
+    var totalTrxBulan   = myBulanData.reduce(function(s, o) { return s + (o.trx  || 0); }, 0);
+    var totalOmsetHari  = todayData.reduce(function(s, p) { return s + (p.total || 0); }, 0);
+
+    // Update KPI cards dengan nilai bulanan yang benar
+    var _fmtK = typeof _fmtJuta === 'function' ? _fmtJuta : function(n) { return n.toLocaleString('id-ID'); };
+    var _setK  = typeof _setKPI  === 'function' ? _setKPI  : null;
+
+    if (_setK) {
+      // KPI 1: Omset Bulan Ini (FIX: bukan all-time)
+      _setK('kpi-omset',
+        'Rp ' + _fmtK(totalOmsetBulan),
+        totalTrxBulan + ' trx bulan ini',
+        totalOmsetBulan > 0 ? 'up' : '',
+        'kpi-omset-label', 'Omset Bulan Ini'
+      );
+      // Sembunyikan clock (bukan KPI real-time)
+      var clockEl = document.getElementById('kpi-omset-clock');
+      if (clockEl) clockEl.style.display = 'none';
+
+      // KPI 4: Omset Hari Ini (real-time)
+      _setK('kpi-stok',
+        'Rp ' + _fmtK(totalOmsetHari),
+        todayData.length + ' transaksi hari ini',
+        todayData.length ? 'up' : '',
+        'kpi-stok-label', 'Omset Hari Ini'
+      );
+    } else {
+      // Fallback: update DOM langsung jika _setKPI tidak ada
+      var elOmset = document.getElementById('kpi-omset');
+      if (elOmset) elOmset.textContent = 'Rp ' + _fmtK(totalOmsetBulan);
+      var elOmsetLbl = document.getElementById('kpi-omset-label');
+      if (elOmsetLbl) elOmsetLbl.textContent = 'Omset Bulan Ini';
+      var elOmsetSub = document.querySelector('#kpi-omset-card .kpi-sub');
+      if (elOmsetSub) elOmsetSub.textContent = totalTrxBulan + ' trx bulan ini';
+    }
+
+    // Update tabel performa: histori per bulan
+    var tp = document.getElementById('tbl-performa');
+    var perfTitle = document.getElementById('tbl-performa-title');
+    if (perfTitle) perfTitle.textContent = 'Histori Omset Bulanan — ' + myCabang;
+    if (tp) {
+      var byMonth = {};
+      (typeof omsetHistory !== 'undefined' ? omsetHistory : [])
+        .filter(function(o) { return o.cabang === myCabang && o.tanggal; })
+        .forEach(function(o) {
+          var mon = o.tanggal.slice(0, 7);
+          if (!byMonth[mon]) byMonth[mon] = { omset: 0, trx: 0 };
+          byMonth[mon].omset += (o.omset || 0);
+          byMonth[mon].trx   += (o.trx   || 0);
+        });
+      var months = Object.keys(byMonth).sort().reverse().slice(0, 6);
+      var _fmtKa = typeof _fmtJuta === 'function' ? _fmtJuta : function(n){ return n.toLocaleString('id-ID'); };
+      tp.innerHTML = '<thead><tr><th>Bulan</th><th class="th-right">Omset</th><th class="th-center">Trx</th><th class="th-right">Avg/Trx</th></tr></thead><tbody>'
+        + (months.length ? months.map(function(m) {
+            var d = byMonth[m];
+            var avg = d.trx > 0 ? Math.round(d.omset / d.trx) : 0;
+            var label = new Date(m + '-01').toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+            var isThisMon = m === thisMonPrefixKedai;
+            return '<tr' + (isThisMon ? ' style="background:rgba(192,57,43,.04)"' : '') + '>'
+              + '<td style="color:var(--text' + (isThisMon ? '' : '3') + ');font-weight:' + (isThisMon ? 700 : 400) + '">'
+              + label + (isThisMon ? ' <span style="font-size:.62rem;color:var(--red);font-weight:700">bulan ini</span>' : '') + '</td>'
+              + '<td class="td-num" style="color:var(--red);font-weight:600">Rp ' + d.omset.toLocaleString('id-ID') + '</td>'
+              + '<td class="td-center">' + d.trx + '</td>'
+              + '<td class="td-num" style="color:var(--text3)">' + (avg > 0 ? 'Rp ' + avg.toLocaleString('id-ID') : '—') + '</td>'
+              + '</tr>';
+          }).join('')
+          : '<tr class="tbl-empty"><td colspan="4">Belum ada data omset</td></tr>'
+        ) + '</tbody>';
+    }
+
+    // Update daily report tabel dengan transaksi hari ini
+    var tdr = document.getElementById('tbl-daily-report');
+    if (tdr) {
+      var _escX = typeof _esc === 'function' ? _esc : function(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+      tdr.innerHTML = '<thead><tr><th>Waktu</th><th>Pelanggan</th><th>No. HP</th><th class="th-center">Pembayaran</th><th>Item</th><th class="th-right">Total</th></tr></thead><tbody>'
+        + (todayData.length ? todayData.map(function(p) {
+            var itemStr = Array.isArray(p.items) ? p.items.map(function(i) { return _escX(i.name) + ' x' + i.qty; }).join(', ') : (p.items || '—');
+            return '<tr>'
+              + '<td style="font-size:.75rem;color:var(--text3)">' + ((p.tanggal||'').slice(11,16)||'—') + '</td>'
+              + '<td>' + _escX(p.pelanggan) + '</td>'
+              + '<td style="font-size:.75rem;color:var(--text3)">' + (p.phone||'—') + '</td>'
+              + '<td><span class="td-badge badge-open">' + _escX(p.bayar) + '</span></td>'
+              + '<td style="font-size:.75rem;color:var(--text3)">' + itemStr + '</td>'
+              + '<td class="td-num" style="color:var(--red);font-weight:700">Rp ' + (p.total||0).toLocaleString('id-ID') + '</td>'
+              + '</tr>';
+          }).join('')
+          : '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text4)">Belum ada transaksi hari ini</td></tr>'
+        ) + '</tbody>';
+    }
+
+    // Update summary stats
+    var summaryStats = document.getElementById('daily-summary-stats');
+    if (summaryStats) {
+      var _fmtSS = typeof _fmtJuta === 'function' ? _fmtJuta : function(n){return n.toLocaleString('id-ID');};
+      summaryStats.innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px">'
+          + '<span style="font-size:.78rem;color:var(--text2)">Trx Hari Ini</span>'
+          + '<span style="font-weight:800;font-size:1.1rem;color:var(--text)">' + todayData.length + '</span>'
+        + '</div>'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px">'
+          + '<span style="font-size:.78rem;color:var(--text2)">Omset Hari Ini</span>'
+          + '<span style="font-weight:800;font-size:1rem;color:var(--red)">Rp ' + _fmtSS(totalOmsetHari) + '</span>'
+        + '</div>'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
+          + '<span style="font-size:.78rem;color:var(--text2)">Omset Bulan Ini</span>'
+          + '<span style="font-weight:700;font-size:.9rem;color:var(--red)">Rp ' + _fmtSS(totalOmsetBulan) + '</span>'
+        + '</div>';
+    }
+  } catch(e) {
+    console.warn('[KD v140] renderDashboardForRole patch error:', e);
+  }
+};
+
+
+/* ════════════════════════════════════════════════════════════════
+   FIX 3 — ISOLASI TRANSAKSI PER CABANG
+   Override renderPenjualanTable dari transaksi-stok.js
+   ════════════════════════════════════════════════════════════════ */
+
+window.renderPenjualanTable = function() {
+  var tbl = document.getElementById('tbl-penjualan');
+  if (!tbl) return;
+  var isSA = (typeof currentUserRole !== 'undefined') && currentUserRole === 'superadmin';
+  var myCabang = (window._currentAdmin)
+    ? (window._currentAdmin.cabang_name || window._currentAdmin.cabang || '')
+    : '';
+
+  // FIX v140: Non-superadmin hanya lihat transaksi cabangnya sendiri
+  var allData = (typeof penjualanData !== 'undefined') ? penjualanData : [];
+  var visibleData = isSA
+    ? allData
+    : allData.filter(function(p) { return p.cabang === myCabang; });
+
+  if (!visibleData.length) {
+    tbl.innerHTML = '<tbody><tr class="tbl-empty"><td colspan="' + (isSA ? 9 : 8) + '">'
+      + 'Belum ada transaksi' + (!isSA && myCabang ? ' untuk ' + myCabang : '')
+      + '</td></tr></tbody>';
+    return;
+  }
+
+  var _escF = typeof _esc === 'function' ? _esc : function(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');};
+  var _escJA = typeof _escJsAttr === 'function' ? _escJsAttr : _escF;
+  var hdDel = isSA ? '<th style="width:70px">Hapus</th>' : '';
+
+  var rows = visibleData.map(function(p) {
+    var itemStr = Array.isArray(p.items)
+      ? p.items.map(function(i) { return _escF(i.name) + ' x' + i.qty; }).join(', ')
+      : (p.items || '\u2014');
+    return '<tr>'
+      + '<td style="font-size:.72rem;font-weight:600;color:var(--text4)">' + _escF(p.id) + '</td>'
+      + '<td style="font-size:.76rem;color:var(--text3)">' + _escF((p.tanggal||'').slice(11,16)||(p.tanggal||'').slice(0,10)) + '</td>'
+      + '<td style="font-size:.8rem">' + _escF(p.cabang) + '</td>'
+      + '<td>' + _escF(p.pelanggan) + '</td>'
+      + '<td><span class="td-badge badge-open">' + _escF(p.bayar) + '</span></td>'
+      + '<td style="font-size:.75rem;color:var(--text3);max-width:140px">' + itemStr + '</td>'
+      + '<td class="td-num" style="color:var(--red);font-weight:700">Rp ' + (p.total||0).toLocaleString('id-ID') + '</td>'
+      + '<td><button class="btn-print-struk" onclick="pjPrintStruk(\'' + _escJA(p.id) + '\')" title="Cetak struk">'
+        + '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline-block;vertical-align:middle;width:1.1em;height:1.1em"><path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 14h12v8H6z"/></svg>'
+      + '</button></td>'
+      + (isSA ? '<td><button class="btn-sa-del" onclick="showDeletePenjualanById(\''
+          + _escJA(p.id) + '\',\''
+          + _escJA((p.tanggal||'').slice(0,16)+' \u00b7 '+(p.cabang||'').replace('Kampung Dimsum ','KD ')+' \u00b7 Rp '+(p.total||0).toLocaleString('id-ID'))
+          + '\')">Hapus</button></td>' : '')
+      + '</tr>';
+  }).join('');
+
+  tbl.innerHTML = '<thead><tr>'
+    + '<th>ID</th><th>Waktu</th><th>Cabang</th><th>Pelanggan</th>'
+    + '<th class="th-center">Pembayaran</th><th>Item</th>'
+    + '<th class="th-right">Total</th><th style="width:64px">Struk</th>'
+    + hdDel
+    + '</tr></thead><tbody>' + rows + '</tbody>';
+};
+
+
+/* ════════════════════════════════════════════════════════════════
+   FIX 4 — STOK GUDANG BAHAN BAKU
+   State + CRUD + render panel stok gudang
+   ════════════════════════════════════════════════════════════════ */
+
+// ── State ──
+var _stokGudang = {};  // { cabang: { nama_bahan: qty } }
+
+window._sgGet = function(cabang, nama) {
+  if (!_stokGudang[cabang]) return 0;
+  return _stokGudang[cabang][nama] || 0;
+};
+window._sgAdd = function(cabang, nama, qty) {
+  if (!_stokGudang[cabang]) _stokGudang[cabang] = {};
+  _stokGudang[cabang][nama] = (_sgGet(cabang, nama) + qty);
+};
+window._sgDeduct = function(cabang, nama, qty) {
+  if (!_stokGudang[cabang]) _stokGudang[cabang] = {};
+  _stokGudang[cabang][nama] = Math.max(0, _sgGet(cabang, nama) - qty);
+};
+window._sgSaveLocal = function() {
+  try { localStorage.setItem('kd_stokGudangBB', JSON.stringify(_stokGudang)); } catch(e) {}
+};
+window._sgLoadLocal = function() {
+  try { var d = localStorage.getItem('kd_stokGudangBB'); if (d) _stokGudang = JSON.parse(d); } catch(e) {}
+};
+window._sgSyncToSupabase = async function(cabang, nama, satuan) {
+  var sb = (typeof getSB === 'function') ? getSB() : null;
+  if (!sb) return;
+  var newStok = _sgGet(cabang, nama);
+  try {
+    await sb.from('stok_gudang_bb').upsert(
+      { cabang: cabang, nama_bahan: nama, satuan: satuan, stok_tersedia: newStok, updated_at: new Date().toISOString() },
+      { onConflict: 'cabang,nama_bahan' }
+    );
+  } catch(e) { console.warn('[KD] _sgSyncToSupabase:', e); }
+};
+window._sgLoadFromSupabase = async function(cabang) {
+  var sb = (typeof getSB === 'function') ? getSB() : null;
+  if (!sb) { _sgLoadLocal(); return; }
+  try {
+    var q = sb.from('stok_gudang_bb').select('*');
+    if (cabang) q = q.eq('cabang', cabang);
+    var res = await q;
+    if (!res.error && res.data) {
+      res.data.forEach(function(r) {
+        if (!_stokGudang[r.cabang]) _stokGudang[r.cabang] = {};
+        _stokGudang[r.cabang][r.nama_bahan] = r.stok_tersedia || 0;
+      });
+      _sgSaveLocal();
+    }
+  } catch(e) { _sgLoadLocal(); }
+};
+
+// ── Hook bbSave: setelah berhasil simpan → tambah stok gudang ──
+var _origBbSave = window.bbSave;
+window.bbSave = async function() {
+  // Simpan snapshot items sebelum fungsi asli mengosongkan form
+  var cabangEl = document.getElementById('bb-cabang');
+  var cabang = cabangEl ? cabangEl.value : '';
+  var snapshotItems = (typeof _bbItems !== 'undefined') ? JSON.parse(JSON.stringify(_bbItems)) : [];
+
+  // Panggil fungsi asli
+  if (typeof _origBbSave === 'function') {
+    await _origBbSave.apply(this, arguments);
+  }
+
+  // Setelah simpan berhasil (showToast sudah dipanggil), update stok gudang
+  if (cabang && snapshotItems.length) {
+    snapshotItems.forEach(function(it) {
+      var nama = (it.nama || '').trim();
+      var qty  = parseFloat(it.qty) || 0;
+      var sat  = it.satuan || 'kg';
+      if (!nama || qty <= 0) return;
+      _sgAdd(cabang, nama, qty);
+      _sgSyncToSupabase(cabang, nama, sat);
+    });
+    _sgSaveLocal();
+    // Render ulang stok gudang jika panel aktif
+    var panelBB = document.getElementById('panel-bahan-baku');
+    if (panelBB && panelBB.classList.contains('active')) {
+      bbRenderStokGudang();
+    }
+  }
+};
+
+// ── Render panel Stok Gudang ──
+window.bbRenderStokGudang = function() {
+  var wrap = document.getElementById('bb-stok-gudang-wrap');
+  if (!wrap) return;
+
+  var isSA = (typeof currentUserRole !== 'undefined') && currentUserRole === 'superadmin';
+  var myCabang = (window._currentAdmin) ? (window._currentAdmin.cabang_name || window._currentAdmin.cabang || '') : '';
+  var _escG = typeof _esc === 'function' ? _esc : function(s){return String(s);};
+
+  var cabangList;
+  if (isSA) {
+    cabangList = Object.keys(_stokGudang);
+    var rpCabang = (typeof cabangData !== 'undefined') ? cabangData.filter(function(c){ return c.type === 'produksi'; }).map(function(c){ return c.name; }) : [];
+    rpCabang.forEach(function(n){ if (cabangList.indexOf(n) < 0) cabangList.push(n); });
+  } else {
+    cabangList = myCabang ? [myCabang] : [];
+  }
+
+  if (!cabangList.length) {
+    wrap.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text3);font-size:.82rem">Belum ada data stok gudang</div>';
+    return;
+  }
+
+  wrap.innerHTML = cabangList.map(function(cab) {
+    var items = _stokGudang[cab] || {};
+    var itemKeys = Object.keys(items);
+
+    if (!itemKeys.length) {
+      return '<div style="background:var(--bg2);border:1.5px solid var(--border2);border-radius:12px;padding:12px 14px;margin-bottom:10px">'
+        + '<div style="font-size:.72rem;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">' + _escG(cab) + '</div>'
+        + '<div style="font-size:.78rem;color:var(--text4)">Belum ada bahan baku di gudang ini — catat pembelian dulu</div>'
+        + '</div>';
+    }
+
+    var lowCount = itemKeys.filter(function(k){ return (items[k]||0) < 5 && (items[k]||0) > 0; }).length;
+    var zeroCount = itemKeys.filter(function(k){ return (items[k]||0) <= 0; }).length;
+
+    var rowsHtml = itemKeys.map(function(nama) {
+      var qty = items[nama] || 0;
+      var isLow = qty > 0 && qty < 5;
+      var isZero = qty <= 0;
+      return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px dashed var(--border)">'
+        + '<span style="font-size:.82rem;font-weight:600;color:var(--text)">' + _escG(nama) + '</span>'
+        + '<span style="font-size:.9rem;font-weight:800;color:' + (isZero ? 'var(--text4)' : isLow ? '#dc2626' : 'var(--text)') + '">'
+        + qty.toLocaleString('id-ID') + (isLow ? ' <span style="font-size:.62rem;color:#dc2626">⚠</span>' : '') + '</span>'
+        + '</div>';
+    }).join('');
+
+    var bbColor = typeof _bbCabangColor === 'function' ? _bbCabangColor(cab) : '#2563eb';
+    var alertBorder = (lowCount || zeroCount) ? '#fca5a5' : 'var(--border2)';
+
+    return '<div style="background:var(--bg);border:1.5px solid ' + alertBorder + ';border-radius:14px;overflow:hidden;margin-bottom:12px">'
+      + '<div style="padding:10px 14px;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">'
+        + '<span style="font-size:.72rem;font-weight:700;color:' + bbColor + ';text-transform:uppercase;letter-spacing:.05em">' + _escG(cab) + '</span>'
+        + ((lowCount || zeroCount) ? '<span style="font-size:.65rem;font-weight:700;color:#dc2626;background:#fee2e2;padding:2px 8px;border-radius:20px">' + (lowCount + zeroCount) + ' bahan menipis/habis</span>'
+          : '<span style="font-size:.65rem;color:var(--text4)">' + itemKeys.length + ' jenis bahan</span>')
+      + '</div>'
+      + '<div style="padding:8px 14px 10px">' + rowsHtml + '</div>'
+      + '<div style="padding:0 14px 12px">'
+        + '<button data-cab="' + _escG(cab) + '" onclick="pkOpenModal(this.dataset.cab)" style="width:100%;padding:9px;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;border:none;border-radius:10px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:6px">'
+          + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="13" height="13"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>'
+          + 'Catat Pemakaian Produksi'
+        + '</button>'
+      + '</div>'
+      + '</div>';
+  }).join('');
+};
+
+// ── Hook bbInit: load stok gudang saat panel dibuka ──
+var _origBbInit = window.bbInit;
+window.bbInit = function() {
+  if (typeof _origBbInit === 'function') _origBbInit.apply(this, arguments);
+  // Inject HTML stok gudang jika belum ada
+  var panelBB = document.getElementById('panel-bahan-baku');
+  if (panelBB && !document.getElementById('bb-stok-gudang-wrap')) {
+    var sgSection = document.createElement('div');
+    sgSection.style.cssText = 'margin:0 0 20px';
+    sgSection.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">'
+      + '<div>'
+        + '<div style="font-size:.88rem;font-weight:800;color:var(--text);display:flex;align-items:center;gap:7px">'
+          + '<span style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:.85rem;flex-shrink:0">🏭</span>'
+          + 'Stok Gudang Bahan Baku'
+        + '</div>'
+        + '<div style="font-size:.72rem;color:var(--text3);margin-top:2px;margin-left:35px">Saldo bahan per rumah produksi</div>'
+      + '</div>'
+      + '<button onclick="_sgLoadFromSupabase().then(bbRenderStokGudang)" style="padding:6px 11px;border:1.5px solid var(--border2);border-radius:9px;background:var(--bg);color:var(--text3);font-size:.72rem;font-weight:600;cursor:pointer;font-family:inherit">↻</button>'
+    + '</div>'
+    + '<div id="bb-stok-gudang-wrap"><div style="text-align:center;padding:20px;color:var(--text3);font-size:.8rem">Memuat stok gudang...</div></div>'
+    + '<div style="height:1px;background:var(--border);margin-bottom:20px"></div>';
+
+    // Insert before the form card (first child yang bukan header)
+    var firstCard = panelBB.querySelector('div[style*="margin:14px 16px 0"]') || panelBB.querySelector('div[style*="Form"]') || panelBB.firstElementChild;
+    if (firstCard) {
+      panelBB.insertBefore(sgSection, firstCard);
+    } else {
+      panelBB.prepend(sgSection);
+    }
+  }
+  _sgLoadLocal();
+  _sgLoadFromSupabase().then(function() { bbRenderStokGudang(); });
+};
+
+/* ─── Modal Pemakaian Produksi ─── */
+var _pkCabang = '';
+var _pkItems  = [];
+var _pkHasilItems = [];
+
+window.pkOpenModal = function(cabang) {
+  _pkCabang = cabang;
+  _pkItems  = [{ nama: '', satuan: 'kg', qty: 1 }];
+  _pkHasilItems = [];
+
+  var existing = document.getElementById('modal-pemakaian-produksi-v140');
+  if (existing) existing.remove();
+
+  var modal = document.createElement('div');
+  modal.id = 'modal-pemakaian-produksi-v140';
+  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);display:flex;align-items:flex-end;justify-content:center;padding:0';
+  modal.innerHTML = '<div id="pk-modal-inner" style="background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:520px;max-height:92dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:20px 18px 40px">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">'
+      + '<div>'
+        + '<div style="font-size:1rem;font-weight:800;color:var(--text)">Catat Pemakaian Produksi</div>'
+        + '<div style="font-size:.72rem;color:var(--text3);margin-top:2px">' + (typeof _esc === 'function' ? _esc(cabang) : cabang) + '</div>'
+      + '</div>'
+      + '<button onclick="pkCloseModal()" style="width:32px;height:32px;border:none;background:var(--bg2);border-radius:50%;cursor:pointer;font-size:1rem;color:var(--text3);display:flex;align-items:center;justify-content:center">✕</button>'
+    + '</div>'
+    + '<div style="margin-bottom:14px">'
+      + '<label style="font-size:.65rem;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:5px">Tanggal Produksi</label>'
+      + '<input type="date" id="pk-tgl-v140" value="' + new Date().toISOString().slice(0,10) + '" style="width:100%;padding:11px 13px;border:1.5px solid var(--border2);border-radius:11px;background:var(--bg2);color:var(--text);font-size:.88rem;font-family:inherit;outline:none;box-sizing:border-box">'
+    + '</div>'
+    + '<div style="font-size:.65rem;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Bahan yang Dipakai</div>'
+    + '<div id="pk-items-wrap-v140"></div>'
+    + '<button onclick="pkAddItem()" style="width:100%;padding:9px;border:1.5px dashed var(--border2);border-radius:10px;background:transparent;color:var(--text3);font-size:.78rem;cursor:pointer;margin-bottom:16px;font-family:inherit">+ Tambah Bahan</button>'
+    + '<div style="font-size:.65rem;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Hasil Dimsum <span style="font-weight:400;text-transform:none;opacity:.7">(opsional)</span></div>'
+    + '<div id="pk-hasil-wrap-v140"></div>'
+    + '<button onclick="pkAddHasil()" style="width:100%;padding:9px;border:1.5px dashed var(--border2);border-radius:10px;background:transparent;color:var(--text3);font-size:.78rem;cursor:pointer;margin-bottom:16px;font-family:inherit">+ Tambah Hasil Produk</button>'
+    + '<div style="margin-bottom:16px">'
+      + '<label style="font-size:.65rem;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:5px">Catatan <span style="font-weight:400;text-transform:none;opacity:.7">(opsional)</span></label>'
+      + '<textarea id="pk-catatan-v140" rows="2" style="width:100%;padding:11px 13px;border:1.5px solid var(--border2);border-radius:11px;background:var(--bg2);color:var(--text);font-size:.85rem;font-family:inherit;outline:none;box-sizing:border-box;resize:none"></textarea>'
+    + '</div>'
+    + '<button onclick="pkSave()" style="width:100%;padding:14px;background:var(--red);color:#fff;border:none;border-radius:12px;font-size:.9rem;font-weight:800;cursor:pointer;font-family:inherit">✅ Simpan Pemakaian Produksi</button>'
+    + '</div>';
+  document.body.appendChild(modal);
+  pkRenderItems();
+  pkRenderHasil();
+};
+
+window.pkCloseModal = function() {
+  var modal = document.getElementById('modal-pemakaian-produksi-v140');
+  if (modal) modal.remove();
+  var dl = document.getElementById('pk-bahan-datalist-v140');
+  if (dl) dl.remove();
+};
+
+window.pkAddItem = function() {
+  _pkItems.push({ nama: '', satuan: 'kg', qty: 1 });
+  pkRenderItems();
+};
+window.pkRemoveItem = function(idx) {
+  if (_pkItems.length <= 1) { if(typeof showToast==='function') showToast('Minimal 1 bahan','error'); return; }
+  _pkItems.splice(idx, 1);
+  pkRenderItems();
+};
+window.pkAddHasil = function() {
+  _pkHasilItems.push({ nama: 'Dimsum Original', qty: 0 });
+  pkRenderHasil();
+};
+window.pkRemoveHasil = function(idx) {
+  _pkHasilItems.splice(idx, 1);
+  pkRenderHasil();
+};
+window.pkUpdateItem = function(idx, field, val) {
+  if (_pkItems[idx]) _pkItems[idx][field] = val;
+  if (field === 'nama' || field === 'qty') pkRenderItems();
+};
+window.pkUpdateHasil = function(idx, field, val) {
+  if (_pkHasilItems[idx]) _pkHasilItems[idx][field] = (field==='qty') ? parseInt(val)||0 : val;
+};
+
+window.pkRenderItems = function() {
+  var wrap = document.getElementById('pk-items-wrap-v140');
+  if (!wrap) return;
+  var gudangItems = _stokGudang[_pkCabang] || {};
+  var namaList = Object.keys(gudangItems).filter(function(k){ return (gudangItems[k]||0) > 0; });
+  var bbSat = typeof BB_SATUAN !== 'undefined' ? BB_SATUAN : ['kg','gram','liter','ml','botol','kaleng','karung','pcs','pack','ikat','lainnya'];
+  var _escR = typeof _esc === 'function' ? _esc : function(s){return String(s);};
+
+  wrap.innerHTML = _pkItems.map(function(item, i) {
+    var stokCurr = _sgGet(_pkCabang, item.nama || '');
+    var isOver = item.nama && (item.qty||0) > stokCurr && stokCurr > 0;
+    var satuanOpts = bbSat.map(function(s){ return '<option value="'+s+'"'+(item.satuan===s?' selected':'')+'>'+s+'</option>'; }).join('');
+    return '<div style="background:var(--bg2);border:1.5px solid '+(isOver?'#fca5a5':'var(--border2)')+';border-radius:12px;padding:12px;margin-bottom:10px">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">'
+        + '<span style="font-size:.7rem;font-weight:700;color:var(--text3)">Bahan ' + (i+1) + '</span>'
+        + (_pkItems.length > 1 ? '<button onclick="pkRemoveItem('+i+')" style="width:22px;height:22px;border:none;background:rgba(220,38,38,.1);border-radius:5px;cursor:pointer;color:#dc2626;font-size:.75rem">✕</button>' : '')
+      + '</div>'
+      + '<input type="text" value="'+_escR(item.nama||'')+'" list="pk-bahan-datalist-v140" oninput="pkUpdateItem('+i+',\'nama\',this.value)" placeholder="Nama bahan (cth: Tepung, Ayam)" style="width:100%;padding:9px 11px;border:1.5px solid var(--border2);border-radius:9px;background:var(--bg);color:var(--text);font-size:.85rem;font-family:inherit;outline:none;box-sizing:border-box;margin-bottom:7px">'
+      + (item.nama && gudangItems[item.nama] !== undefined
+          ? '<div style="font-size:.68rem;color:'+(isOver?'#dc2626':'#16a34a')+';margin-bottom:6px;font-weight:600">📦 Stok gudang: '+stokCurr.toLocaleString('id-ID')+' '+(item.satuan||'')+(isOver?' — melebihi stok!':'')+' </div>'
+          : '')
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'
+        + '<div><label style="font-size:.6rem;color:var(--text3);display:block;margin-bottom:3px">Jumlah Dipakai</label>'
+          + '<input type="number" value="'+(item.qty||0)+'" min="0.01" step="0.01" oninput="pkUpdateItem('+i+',\'qty\',parseFloat(this.value)||0)" style="width:100%;padding:9px 11px;border:1.5px solid var(--border2);border-radius:9px;background:var(--bg);color:var(--text);font-size:.85rem;font-family:inherit;outline:none;box-sizing:border-box"></div>'
+        + '<div><label style="font-size:.6rem;color:var(--text3);display:block;margin-bottom:3px">Satuan</label>'
+          + '<select oninput="pkUpdateItem('+i+',\'satuan\',this.value)" style="width:100%;padding:9px 11px;border:1.5px solid var(--border2);border-radius:9px;background:var(--bg);color:var(--text);font-size:.85rem;font-family:inherit;outline:none;box-sizing:border-box">'+satuanOpts+'</select></div>'
+      + '</div>'
+      + '</div>';
+  }).join('');
+
+  // Datalist autocomplete
+  var dl = document.getElementById('pk-bahan-datalist-v140');
+  if (!dl) {
+    dl = document.createElement('datalist');
+    dl.id = 'pk-bahan-datalist-v140';
+    document.body.appendChild(dl);
+  }
+  dl.innerHTML = namaList.map(function(n){ return '<option value="'+n+'">'; }).join('');
+};
+
+window.pkRenderHasil = function() {
+  var wrap = document.getElementById('pk-hasil-wrap-v140');
+  if (!wrap) return;
+  if (!_pkHasilItems.length) {
+    wrap.innerHTML = '<div style="font-size:.75rem;color:var(--text4);padding:6px 0 8px">Opsional — isi jika ingin catat hasil dimsum</div>';
+    return;
+  }
+  wrap.innerHTML = _pkHasilItems.map(function(h, i) {
+    return '<div style="display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:8px;align-items:end">'
+      + '<div><label style="font-size:.6rem;color:var(--text3);display:block;margin-bottom:3px">Produk Dimsum</label>'
+        + '<input type="text" value="'+(h.nama||'')+'" oninput="pkUpdateHasil('+i+',\'nama\',this.value)" placeholder="cth: Dimsum Ayam" style="width:100%;padding:9px 11px;border:1.5px solid var(--border2);border-radius:9px;background:var(--bg);color:var(--text);font-size:.85rem;font-family:inherit;outline:none;box-sizing:border-box"></div>'
+      + '<div style="display:flex;align-items:flex-end;gap:4px">'
+        + '<div><label style="font-size:.6rem;color:var(--text3);display:block;margin-bottom:3px">Pcs</label>'
+          + '<input type="number" value="'+(h.qty||0)+'" min="0" oninput="pkUpdateHasil('+i+',\'qty\',this.value)" style="width:65px;padding:9px 8px;border:1.5px solid var(--border2);border-radius:9px;background:var(--bg);color:var(--text);font-size:.85rem;font-family:inherit;outline:none;text-align:center"></div>'
+        + '<button onclick="pkRemoveHasil('+i+')" style="width:32px;height:38px;border:none;background:rgba(220,38,38,.1);border-radius:9px;cursor:pointer;color:#dc2626;font-size:.85rem;flex-shrink:0;margin-bottom:0">✕</button>'
+      + '</div>'
+      + '</div>';
+  }).join('');
+};
+
+window.pkSave = async function() {
+  if (!_pkCabang) { if(typeof showToast==='function') showToast('Cabang/gudang tidak valid','error'); return; }
+  var tgl     = (document.getElementById('pk-tgl-v140')||{}).value || new Date().toISOString().slice(0,10);
+  var catatan = (document.getElementById('pk-catatan-v140')||{}).value || '';
+  var inputBy = window._currentAdmin ? (window._currentAdmin.display_name || window._currentAdmin.username || '') : '';
+
+  // Validasi
+  var errors = [];
+  _pkItems.forEach(function(it, i) {
+    if (!it.nama || !it.nama.trim()) errors.push('Bahan ' + (i+1) + ': nama kosong');
+    if (!it.qty || it.qty <= 0)      errors.push('Bahan ' + (i+1) + ': jumlah harus > 0');
+  });
+  if (errors.length) { if(typeof showToast==='function') showToast('❌ ' + errors.join(' | '), 'error'); return; }
+
+  // Cek stok cukup
+  var stockErrors = [];
+  var deductList  = [];
+  _pkItems.forEach(function(it) {
+    var nama    = it.nama.trim();
+    var qty     = parseFloat(it.qty) || 0;
+    var sat     = it.satuan || 'kg';
+    var current = _sgGet(_pkCabang, nama);
+    if (qty > current) {
+      stockErrors.push('"' + nama + '" stok ' + current + ' ' + sat + ', butuh ' + qty + ' ' + sat);
+    } else {
+      deductList.push({ nama: nama, qty: qty, sat: sat });
+    }
+  });
+  if (stockErrors.length) {
+    if(typeof showToast==='function') showToast('❌ Stok tidak cukup: ' + stockErrors.join(' | '), 'error');
+    return;
+  }
+
+  // Deduct stok
+  deductList.forEach(function(d) {
+    _sgDeduct(_pkCabang, d.nama, d.qty);
+    _sgSyncToSupabase(_pkCabang, d.nama, d.sat);
+  });
+  _sgSaveLocal();
+
+  // Hitung total pcs
+  var hasil = _pkHasilItems.filter(function(h){ return h.nama && h.qty > 0; });
+  var totalPcs = hasil.reduce(function(s, h){ return s + (h.qty||0); }, 0);
+
+  // Simpan ke produksi_bb
+  var sb = (typeof getSB === 'function') ? getSB() : null;
+  if (sb) {
+    try {
+      await sb.from('produksi_bb').insert({
+        cabang: _pkCabang,
+        tanggal_beli: tgl,
+        tanggal_selesai: tgl,
+        bahan_dipakai: JSON.stringify(_pkItems),
+        hasil: JSON.stringify(hasil),
+        total_dimsum: totalPcs,
+        catatan: catatan,
+        selesai_oleh: inputBy,
+        created_at: new Date().toISOString()
+      });
+    } catch(e) { console.warn('[KD] pkSave:', e); }
+  }
+
+  bbRenderStokGudang();
+  pkCloseModal();
+  if (typeof showToast === 'function') showToast('✅ Pemakaian produksi dicatat — stok gudang diperbarui', 'success');
+  if (typeof _sbLogActivity === 'function') {
+    _sbLogActivity('Catat pemakaian produksi ' + _pkCabang + ': ' + _pkItems.map(function(it){ return it.qty+' '+it.satuan+' '+it.nama; }).join(', '));
+  }
+  // Re-init laporan produksi jika panel aktif
+  var panelLP = document.getElementById('panel-laporan-produksi');
+  if (panelLP && panelLP.classList.contains('active') && typeof lpInit === 'function') lpInit();
+};
+
+// Load stok gudang awal
+_sgLoadLocal();
+console.log('[KD v140] All patches applied ✅');
+
+} // end _applyPatchV140
+</script>
+
 </body>
 </html>
