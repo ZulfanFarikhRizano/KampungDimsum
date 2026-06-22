@@ -370,7 +370,12 @@ function initMap(){
       inner = '<div style="position:absolute;top:4px;left:4px;width:20px;height:20px;background:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" fill="none" stroke="#B83232" stroke-width="2" width="12" height="12" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20h20M3 20V8l9-6 9 6v12"/><path d="M9 20V14h6v6"/></svg></div>';
     } else if(logoUrl){
       // Pakai dataURL dari cache — ZERO network request per marker
-      inner = '<div style="position:absolute;top:4px;left:4px;width:20px;height:20px;border-radius:50%;overflow:hidden;transform:rotate(45deg)">'
+      // BUG FIX: dulu ada transform:rotate(45deg) di sini — niatnya menetralkan
+      // rotate(-45deg) milik div pin (baris di bawah) supaya logo tetap tegak.
+      // Tapi div ini SIBLING dari div pin (bukan child di dalamnya), jadi rotasi
+      // CSS pin tidak diwariskan ke sini — rotate(45deg) ini cuma bikin logo
+      // ikut miring 45° sendiri (persis "miring jam 1" yang dilaporkan).
+      inner = '<div style="position:absolute;top:4px;left:4px;width:20px;height:20px;border-radius:50%;overflow:hidden">'
         +'<img src="'+logoUrl+'" style="width:20px;height:20px;object-fit:cover;display:block" loading="eager">'
         +'</div>';
     } else {
@@ -765,6 +770,40 @@ renderCabang();
 renderPromo();
 renderTestimoni();
 renderFAQ();
+
+// BUG FIX: cabang baru yang ditambah admin tersimpan benar ke Supabase,
+// tapi pengunjung publik (belum login) tidak pernah fetch ulang — _sbLoadAll()
+// cuma jalan SETELAH admin login (lihat komentar data.js: "diisi dari Supabase
+// setelah login"). Akibatnya cabangData publik selalu pakai array statis
+// hardcode di data.js, pin cabang baru tidak pernah muncul untuk customer.
+// Fix: tampilkan dulu data statis (instan, tanpa nunggu network — UX tetap cepat),
+// lalu diam-diam upgrade ke data live begitu Supabase selesai di-fetch.
+(function _publicRefreshCabang(){
+  if(typeof _loadSupabase !== 'function') return;
+  setTimeout(function(){
+    _loadSupabase(function(){
+      var sb = (typeof getSB === 'function') ? getSB() : null;
+      if(!sb) return;
+      sb.from('cabang').select('*').order('id',{ascending:true}).then(function(res){
+        var cabRows = res.data, cabErr = res.error;
+        if(cabErr || !cabRows || !cabRows.length) return;
+        cabangData.length = 0;
+        cabRows.forEach(function(r){
+          cabangData.push({id:r.id,name:r.name,addr:r.addr||'',jam:r.jam||'08.00–21.00',
+            rating:r.rating||5,wa:r.wa||'',open:r.open!==false,lat:r.lat||0,lng:r.lng||0,
+            mapsUrl:r.maps_url||'',type:r.type||'cabang'});
+        });
+        cabangGeo = cabangData.map(function(c){return{lat:c.lat,lng:c.lng,name:c.name,addr:c.addr,
+          jam:c.jam,rating:c.rating,wa:c.wa,open:c.open,mapsUrl:c.mapsUrl,type:c.type};});
+        renderCabang();
+        // Map mungkin sudah sempat dibuka pengunjung sebelum fetch ini selesai —
+        // hapus instance lama supaya initMap() berikutnya pakai cabangGeo yang baru.
+        if(mapInstance){ mapInstance.remove(); mapInstance=null; initMap(); }
+        console.log('[KD] cabang publik di-refresh dari Supabase:', cabangData.length, 'cabang');
+      }).catch(function(e){ console.warn('[KD] public cabang refresh gagal:', e.message); });
+    });
+  }, 800); // beri jeda agar tidak rebutan bandwidth dengan render awal/gambar hero
+})();
 
 
 
