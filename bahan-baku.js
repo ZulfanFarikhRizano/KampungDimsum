@@ -493,11 +493,9 @@ function _bbSaveLocal(){
 }
 
 function bbRenderTable(){
-  // Target: bb-riwayat-list (card list), bukan tbl-bahan-baku (table lama)
   var list = document.getElementById('bb-riwayat-list');
   if(!list) return;
 
-  // Sync filter cabang dropdown
   var selF = document.getElementById('bb-filter-cabang');
   if(selF){
     var curVal = selF.value;
@@ -510,7 +508,7 @@ function bbRenderTable(){
   }
 
   var filterCabang = selF ? selF.value : '';
-  var filterBulan = (document.getElementById('bb-filter-bulan')||{}).value || ''; // format: "2025-06"
+  var filterBulan = (document.getElementById('bb-filter-bulan')||{}).value || '';
   var rows = _bbData.filter(function(r){
     if(filterCabang && r.cabang !== filterCabang) return false;
     if(filterBulan){
@@ -529,79 +527,75 @@ function bbRenderTable(){
     return;
   }
 
-  list.innerHTML = rows.map(function(r, idx){
+  list.innerHTML = rows.map(function(r){
     var tglFormatted = (function(){
-      try{
-        var d = new Date(r.tanggal);
-        return d.toLocaleDateString('id-ID',{day:'numeric',month:'short',year:'numeric'});
-      }catch(e){ return r.tanggal || '—'; }
+      try{ return new Date(r.tanggal).toLocaleDateString('id-ID',{day:'numeric',month:'short',year:'numeric'}); }
+      catch(e){ return r.tanggal || '—'; }
     })();
+    var cColor = _bbCabangColor(r.cabang);
+    var status = r.status || 'pending';
+    var isSelesai = status === 'selesai';
+    var canAct = (currentUserRole === 'superadmin') || ((window._currentPerms||{}).bahan_baku);
 
-    var itemsHtml = (r.items||[]).map(function(it, ii){
-      var sub = (it.qty||0) * (it.harga||0);
-      var isLast = ii === (r.items||[]).length - 1;
-      return '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:6px 0;'+(isLast?'':'border-bottom:1px dashed var(--border)')+'">'
-        + '<div style="min-width:0">'
-          + '<span style="font-size:.82rem;font-weight:600;color:var(--text)">'+_esc(it.nama||'—')+'</span>'
-          + '<span style="font-size:.72rem;color:var(--text3);margin-left:6px">'+it.qty+' '+_esc(it.satuan||'')+'</span>'
-          + (it.harga>0 ? '<div style="font-size:.7rem;color:var(--text4);margin-top:1px">@ Rp '+it.harga.toLocaleString('id-ID')+'</div>' : '')
+    // Item bahan baku — compact chips
+    var itemChips = (r.items||[]).map(function(it){
+      var sub = (it.qty||0)*(it.harga||0);
+      return '<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px dashed var(--border)">'
+        + '<div style="min-width:0;flex:1">'
+          + '<span style="font-size:.83rem;font-weight:700;color:var(--text)">'+_esc(it.nama||'—')+'</span>'
+          + '<span style="font-size:.72rem;color:var(--text3);margin-left:6px;font-weight:500">'+it.qty+' '+_esc(it.satuan||'')+'</span>'
+          + (it.harga>0 ? '<div style="font-size:.68rem;color:var(--text4);margin-top:1px">@ Rp '+it.harga.toLocaleString('id-ID')+'</div>' : '')
         + '</div>'
-        + '<span style="font-size:.8rem;font-weight:700;color:var(--text2);white-space:nowrap;flex-shrink:0">'
-          + (sub > 0 ? 'Rp '+sub.toLocaleString('id-ID') : '—')
-        + '</span>'
+        + (sub>0 ? '<span style="font-size:.78rem;font-weight:700;color:var(--text2);white-space:nowrap;margin-left:8px">Rp '+sub.toLocaleString('id-ID')+'</span>' : '')
       + '</div>';
     }).join('');
 
-    // Badge warna cabang — otomatis konsisten untuk cabang apapun (lihat _bbCabangColor)
-    var cColor = _bbCabangColor(r.cabang);
-
-    return '<div style="background:var(--bg);border:1.5px solid var(--border2);border-radius:16px;overflow:hidden;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,.04)">'
-      // ── card header ──
-      + '<div style="padding:12px 16px;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;background:var(--bg2);border-bottom:1px solid var(--border)">'
-        + '<div>'
-          + '<div style="display:flex;align-items:center;gap:7px;margin-bottom:3px">'
-            + '<span style="width:8px;height:8px;border-radius:50%;background:'+cColor+';flex-shrink:0;display:inline-block"></span>'
-            + '<span style="font-size:.7rem;font-weight:700;color:'+cColor+';text-transform:uppercase;letter-spacing:.05em">'+_esc(r.cabang||'—')+'</span>'
+    return '<div style="background:var(--bg);border:1.5px solid '+(isSelesai?'#bbf7d0':' var(--border2)')+';border-radius:16px;overflow:hidden;margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,.05)">'
+      // ── header strip ──
+      + '<div style="padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:8px;background:'+(isSelesai?'rgba(22,163,74,.06)':'var(--bg2)')+';border-bottom:1px solid var(--border)">'
+        + '<div style="display:flex;align-items:center;gap:7px;min-width:0">'
+          + '<span style="width:9px;height:9px;border-radius:50%;background:'+cColor+';flex-shrink:0;display:inline-block"></span>'
+          + '<div style="min-width:0">'
+            + '<div style="font-size:.72rem;font-weight:700;color:'+cColor+';text-transform:uppercase;letter-spacing:.04em;line-height:1.2">'+_esc(r.cabang||'—')+'</div>'
+            + '<div style="font-size:.68rem;color:var(--text3)">'+tglFormatted+'</div>'
           + '</div>'
-          + '<div style="font-size:.72rem;color:var(--text3)">'+tglFormatted+'</div>'
         + '</div>'
-        + '<div style="text-align:right;flex-shrink:0">'
-          + '<div style="font-size:.72rem;color:var(--text3);margin-bottom:1px">Total</div>'
-          + '<div style="font-size:1rem;font-weight:800;color:var(--red)">Rp '+(r.total||0).toLocaleString('id-ID')+'</div>'
+        + '<div style="display:flex;align-items:center;gap:6px;flex-shrink:0">'
+          + (isSelesai ? '<span style="padding:3px 8px;background:#f0fdf4;border:1px solid #86efac;border-radius:20px;font-size:.62rem;font-weight:700;color:#16a34a">✅ Selesai</span>' : '<span style="padding:3px 8px;background:rgba(234,179,8,.1);border:1px solid rgba(234,179,8,.4);border-radius:20px;font-size:.62rem;font-weight:700;color:#b45309">⏳ Proses</span>')
+          + '<div style="text-align:right">'
+            + '<div style="font-size:.6rem;color:var(--text3)">Total</div>'
+            + '<div style="font-size:.9rem;font-weight:800;color:var(--red)">Rp '+(r.total||0).toLocaleString('id-ID')+'</div>'
+          + '</div>'
         + '</div>'
       + '</div>'
-      // ── items ──
-      + '<div style="padding:10px 16px 6px">'
-        + itemsHtml
+      // ── items list ──
+      + '<div style="padding:8px 14px 4px">'
+        + (itemChips || '<div style="padding:4px 0;font-size:.75rem;color:var(--text4)">Tidak ada item</div>')
       + '</div>'
-      // ── footer meta ──
+      // ── meta footer (supplier/catatan/inputBy) ──
       + ((r.supplier||r.catatan||r.inputBy) ? (
-        '<div style="padding:8px 16px 12px;background:var(--bg2);border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:8px">'
-          + (r.supplier ? '<span style="display:inline-flex;align-items:center;gap:4px;font-size:.7rem;color:var(--text3)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>'+_esc(r.supplier)+'</span>' : '')
-          + (r.catatan ? '<span style="display:inline-flex;align-items:center;gap:4px;font-size:.7rem;color:var(--text3)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>'+_esc(r.catatan)+'</span>' : '')
-          + (r.inputBy ? '<span style="display:inline-flex;align-items:center;gap:4px;font-size:.7rem;color:var(--text4);margin-left:auto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="11" height="11"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>'+_esc(r.inputBy)+'</span>' : '')
+        '<div style="padding:6px 14px 10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">'
+          + (r.supplier ? '<span style="display:inline-flex;align-items:center;gap:4px;font-size:.68rem;color:var(--text3);background:var(--bg2);padding:3px 7px;border-radius:6px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>'+_esc(r.supplier)+'</span>' : '')
+          + (r.catatan ? '<span style="display:inline-flex;align-items:center;gap:4px;font-size:.68rem;color:var(--text3);background:var(--bg2);padding:3px 7px;border-radius:6px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>'+_esc(r.catatan)+'</span>' : '')
+          + (r.inputBy ? '<span style="display:inline-flex;align-items:center;gap:4px;font-size:.68rem;color:var(--text4);margin-left:auto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="10" height="10"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>'+_esc(r.inputBy)+'</span>' : '')
+        + '</div>'
+      ) : '<div style="height:6px"></div>')
+      // ── action buttons ──
+      + (canAct ? (
+        '<div style="padding:0 14px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px">'
+          + '<button data-bbid="'+r.id+'" onclick="bbHapus(this.dataset.bbid)" style="display:inline-flex;align-items:center;gap:4px;padding:6px 10px;background:transparent;color:#ef4444;border:1.5px solid #fca5a5;border-radius:9px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit">'
+            + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="11" height="11"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>'
+            + 'Hapus</button>'
+          + (isSelesai
+              ? '<span style="display:inline-flex;align-items:center;gap:5px;padding:6px 12px;background:#f0fdf4;border:1.5px solid #86efac;border-radius:9px;font-size:.72rem;font-weight:700;color:#16a34a">'
+                + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="11" height="11"><path d="M9 11l3 3L22 4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+                + 'Selesai Produksi</span>'
+              : '<button data-bbid="'+r.id+'" onclick="bbTandaiProduksi(this.dataset.bbid)" style="display:inline-flex;align-items:center;gap:5px;padding:7px 13px;background:#16a34a;color:#fff;border:none;border-radius:9px;font-size:.75rem;font-weight:700;cursor:pointer;box-shadow:0 2px 8px rgba(22,163,74,.28);font-family:inherit">'
+                + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="12" height="12"><path d="M9 11l3 3L22 4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+                + 'Tandai Selesai</button>'
+            )
         + '</div>'
       ) : '')
-      // ── Tombol Tandai Selesai Produksi ──
-      + (function(){
-          var status = r.status || 'pending';
-          if(status === 'selesai'){
-            return '<div style="padding:8px 16px 14px;display:flex;justify-content:flex-end">'
-              + '<span style="display:inline-flex;align-items:center;gap:5px;padding:6px 12px;background:#f0fdf4;border:1.5px solid #86efac;border-radius:10px;font-size:.75rem;font-weight:700;color:#16a34a">'
-              + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="12" height="12"><path d="M9 11l3 3L22 4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-              + 'Selesai Produksi</span></div>';
-          }
-          var canAct = (currentUserRole === 'superadmin') || ((window._currentPerms||{}).bahan_baku);
-          if(!canAct) return '';
-          // Simpan id di dataset, bukan inline onclick string
-          return '<div style="padding:8px 16px 14px;display:flex;justify-content:space-between;align-items:center;gap:8px">'
-            + '<button data-bbid="'+r.id+'" onclick="bbHapus(this.dataset.bbid)" style="display:inline-flex;align-items:center;gap:5px;padding:7px 12px;background:transparent;color:#ef4444;border:1.5px solid #fca5a5;border-radius:10px;font-size:.75rem;font-weight:700;cursor:pointer;font-family:inherit">'
-            + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="12" height="12"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>'
-            + 'Hapus</button>'
-            + '<button data-bbid="'+r.id+'" onclick="bbTandaiProduksi(this.dataset.bbid)" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:#16a34a;color:#fff;border:none;border-radius:10px;font-size:.78rem;font-weight:700;cursor:pointer;box-shadow:0 2px 8px rgba(22,163,74,.25);font-family:inherit">'
-            + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="13" height="13"><path d="M9 11l3 3L22 4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-            + 'Tandai Selesai Produksi</button></div>';
-        })()
     + '</div>';
   }).join('');
 }
@@ -779,12 +773,23 @@ function bbProduksiSave(){
   var tglSelesai = (document.getElementById('bb-prod-tanggal')||{}).value || '';
   if(!tglSelesai){ showToast('Pilih tanggal selesai produksi','error'); return; }
 
-  var validHasil = _bbProdItems.filter(function(it){ return it.qty > 0; });
+  // Sinkronkan qty dari DOM input sebelum validasi (antisipasi oninput tidak ter-fire)
+  _bbProdItems.forEach(function(item, i){
+    var inp = document.getElementById('bb-pq-'+i);
+    if(inp) item.qty = parseInt(inp.value)||0;
+  });
+
+  var validHasil = _bbProdItems.filter(function(it){ return (it.nama||'').trim() && it.qty > 0; });
   if(!validHasil.length){ showToast('Isi minimal satu produk dengan jumlah > 0','error'); return; }
 
-  var totalDimsum = validHasil.reduce(function(s,it){ return s+it.qty; }, 0);
+  var totalDimsum = validHasil.reduce(function(s,it){ return s+(parseInt(it.qty)||0); }, 0);
   var catatan = (document.getElementById('bb-prod-catatan')||{}).value || '';
-  var selesaiOleh = (window._currentAdmin && window._currentAdmin.username) || '';
+  var selesaiOleh = (window._currentAdmin && (window._currentAdmin.display_name || window._currentAdmin.username)) || '';
+
+  // Bahan baku yang diproses — ambil dari record pembelian
+  var bahanDipakai = (rec.items || []).map(function(it){
+    return { nama: it.nama||'', qty: it.qty||0, satuan: it.satuan||'' };
+  });
 
   var prodRecord = {
     bahan_baku_id: rec.id,
@@ -796,7 +801,7 @@ function bbProduksiSave(){
     catatan: catatan,
     selesai_oleh: selesaiOleh,
     created_at: new Date().toISOString(),
-    _bb_items: rec.items || []
+    _bb_items: bahanDipakai
   };
 
   var sb = getSB ? getSB() : null;
@@ -811,7 +816,8 @@ function bbProduksiSave(){
       hasil: JSON.stringify(prodRecord.hasil),
       total_dimsum: prodRecord.total_dimsum,
       catatan: prodRecord.catatan,
-      selesai_oleh: prodRecord.selesai_oleh
+      selesai_oleh: prodRecord.selesai_oleh,
+      bahan_dipakai: JSON.stringify(bahanDipakai)
     }]).then(function(res){
       if(res.error){
         prodRecord.id = Date.now();
@@ -875,12 +881,15 @@ function _lpLoadData(){
         _lpData = res.data.map(function(r){
           var hasil = [];
           try{ hasil = typeof r.hasil === 'string' ? JSON.parse(r.hasil) : (r.hasil||[]); }catch(e){}
+          var bbItems = [];
+          try{ bbItems = typeof r.bahan_dipakai === 'string' ? JSON.parse(r.bahan_dipakai) : (r.bahan_dipakai||[]); }catch(e){}
           return {
             id: r.id, bahan_baku_id: r.bahan_baku_id,
             cabang: r.cabang, tanggal_beli: r.tanggal_beli,
             tanggal_selesai: r.tanggal_selesai,
             hasil: hasil, total_dimsum: r.total_dimsum||0,
             catatan: r.catatan||'', selesai_oleh: r.selesai_oleh||'',
+            _bb_items: bbItems,
             created_at: r.created_at
           };
         });
@@ -920,8 +929,11 @@ var _lpMigrationSQL = 'CREATE TABLE IF NOT EXISTS produksi_bb (\n'
   + '  total_dimsum   INT DEFAULT 0,\n'
   + '  catatan        TEXT,\n'
   + '  selesai_oleh   TEXT,\n'
+  + '  bahan_dipakai  JSONB DEFAULT \'[]\',\n'
   + '  created_at     TIMESTAMPTZ DEFAULT NOW()\n'
-  + ');';
+  + ');\n'
+  + '-- Jika tabel sudah ada, tambah kolom bahan_dipakai:\n'
+  + 'ALTER TABLE produksi_bb ADD COLUMN IF NOT EXISTS bahan_dipakai JSONB DEFAULT \'[]\';';
 
 var _lpMigrationShown = false;
 function _lpShowMigrationBanner(){
