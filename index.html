@@ -2609,6 +2609,7 @@ CREATE TABLE IF NOT EXISTS produksi_bb (
   total_dimsum INT DEFAULT 0,
   catatan TEXT DEFAULT '',
   selesai_oleh TEXT DEFAULT '',
+  bahan_dipakai JSONB DEFAULT '[]',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE produksi_bb ENABLE ROW LEVEL SECURITY;
@@ -2708,7 +2709,7 @@ CREATE POLICY "authenticated_all" ON produksi_bb FOR ALL USING (auth.role()='aut
               </div>
             </div>
             <!-- Riwayat list (cards, bukan table) -->
-            <div id="bb-riwayat-list" style="padding:8px 16px 12px"></div>
+            <div id="bb-riwayat-list" style="padding:8px 16px 24px"></div>
           </div>
 
         </div>
@@ -3922,8 +3923,8 @@ window.bbInit = function() {
   var panelBB = document.getElementById('panel-bahan-baku');
   if (panelBB && !document.getElementById('bb-stok-gudang-wrap')) {
     var sgSection = document.createElement('div');
-    sgSection.style.cssText = 'margin:0 0 20px';
-    sgSection.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">'
+    sgSection.style.cssText = 'margin:0;padding:0';
+    sgSection.innerHTML = '<div style="padding:14px 16px 10px;display:flex;align-items:center;justify-content:space-between">'
       + '<div>'
         + '<div style="font-size:.88rem;font-weight:800;color:var(--text);display:flex;align-items:center;gap:7px">'
           + '<span style="width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:.85rem;flex-shrink:0">🏭</span>'
@@ -3933,8 +3934,8 @@ window.bbInit = function() {
       + '</div>'
       + '<button onclick="_sgLoadFromSupabase().then(bbRenderStokGudang)" style="padding:6px 11px;border:1.5px solid var(--border2);border-radius:9px;background:var(--bg);color:var(--text3);font-size:.72rem;font-weight:600;cursor:pointer;font-family:inherit">↻</button>'
     + '</div>'
-    + '<div id="bb-stok-gudang-wrap"><div style="text-align:center;padding:20px;color:var(--text3);font-size:.8rem">Memuat stok gudang...</div></div>'
-    + '<div style="height:1px;background:var(--border);margin-bottom:20px"></div>';
+    + '<div style="padding:0 16px 4px" id="bb-stok-gudang-wrap"><div style="text-align:center;padding:20px;color:var(--text3);font-size:.8rem">Memuat stok gudang...</div></div>'
+    + '<div style="height:1px;background:var(--border);margin:8px 16px 16px"></div>';
 
     // Insert before the form card (first child yang bukan header)
     var firstCard = panelBB.querySelector('div[style*="margin:14px 16px 0"]') || panelBB.querySelector('div[style*="Form"]') || panelBB.firstElementChild;

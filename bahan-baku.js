@@ -733,13 +733,13 @@ function bbProdRenderItems(){
     }).join('');
     return (
       '<div style="background:var(--bg2);border:1.5px solid var(--border2);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:8px">'
-        + '<select oninput="_bbProdItems['+i+'].nama=this.value" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid var(--border2);border-radius:9px;background:var(--bg);color:var(--text);font-size:.85rem;font-weight:600;font-family:inherit;outline:none;appearance:none;-webkit-appearance:none">'
+        + '<select onchange="_bbProdItems['+i+'].nama=this.value" oninput="_bbProdItems['+i+'].nama=this.value" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid var(--border2);border-radius:9px;background:var(--bg);color:var(--text);font-size:.85rem;font-weight:600;font-family:inherit;outline:none;appearance:none;-webkit-appearance:none">'
           + selectedOpts
         + '</select>'
         + '<div style="display:flex;align-items:center;gap:8px">'
           + '<div style="display:flex;align-items:center;gap:6px;border:1.5px solid var(--border2);border-radius:9px;background:var(--bg);overflow:hidden;height:44px;padding:4px;flex:1;box-sizing:border-box">'
             + '<button onclick="var n=parseInt(document.getElementById(\'bb-pq-'+i+'\').value||0);n=Math.max(0,n-1);document.getElementById(\'bb-pq-'+i+'\').value=n;_bbProdItems['+i+'].qty=n;bbProdUpdateTotal()" style="width:36px;height:36px;border:none;border-radius:8px;background:var(--bg2);cursor:pointer;color:var(--text2);font-size:1.15rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">−</button>'
-            + '<input id="bb-pq-'+i+'" type="number" min="0" inputmode="numeric" value="'+item.qty+'" oninput="_bbProdItems['+i+'].qty=parseInt(this.value)||0;bbProdUpdateTotal()" style="flex:1;min-width:0;text-align:center;border:none;background:transparent;font-size:1rem;font-weight:800;color:var(--red,#dc2626);outline:none;font-family:inherit;padding:0;-moz-appearance:textfield;-webkit-appearance:none" />'
+            + '<input id="bb-pq-'+i+'" type="number" min="0" inputmode="numeric" value="'+item.qty+'" oninput="_bbProdItems['+i+'].qty=parseInt(this.value)||_bbProdItems['+i+'].qty;bbProdUpdateTotal()" onchange="_bbProdItems['+i+'].qty=parseInt(this.value)||_bbProdItems['+i+'].qty;bbProdUpdateTotal()" style="flex:1;min-width:0;text-align:center;border:none;background:transparent;font-size:1rem;font-weight:800;color:var(--red,#dc2626);outline:none;font-family:inherit;padding:0;-moz-appearance:textfield;-webkit-appearance:none" />'
             + '<button onclick="var n=parseInt(document.getElementById(\'bb-pq-'+i+'\').value||0)+1;document.getElementById(\'bb-pq-'+i+'\').value=n;_bbProdItems['+i+'].qty=n;bbProdUpdateTotal()" style="width:36px;height:36px;border:none;border-radius:8px;background:rgba(220,38,38,.12);cursor:pointer;color:var(--red,#dc2626);font-size:1.15rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0">+</button>'
           + '</div>'
           + '<span style="font-size:.82rem;color:var(--text3);font-weight:600;flex-shrink:0">pcs</span>'
@@ -773,10 +773,15 @@ function bbProduksiSave(){
   var tglSelesai = (document.getElementById('bb-prod-tanggal')||{}).value || '';
   if(!tglSelesai){ showToast('Pilih tanggal selesai produksi','error'); return; }
 
-  // Sinkronkan qty dari DOM input sebelum validasi (antisipasi oninput tidak ter-fire)
+  // Sinkronkan qty dari DOM input sebelum validasi
+  // Fallback ke nilai array jika input kosong (mobile number input edge case)
   _bbProdItems.forEach(function(item, i){
     var inp = document.getElementById('bb-pq-'+i);
-    if(inp) item.qty = parseInt(inp.value)||0;
+    if(inp){
+      var v = parseInt(inp.value);
+      if(!isNaN(v)) item.qty = v;
+      // jika NaN (input kosong), tetap pakai item.qty yang sudah ada
+    }
   });
 
   var validHasil = _bbProdItems.filter(function(it){ return (it.nama||'').trim() && it.qty > 0; });
