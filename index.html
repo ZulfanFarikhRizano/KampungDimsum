@@ -3963,8 +3963,8 @@ window.pkOpenModal = function(cabang) {
 
   var modal = document.createElement('div');
   modal.id = 'modal-pemakaian-produksi-v140';
-  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);display:flex;align-items:flex-end;justify-content:center;padding:0';
-  modal.innerHTML = '<div id="pk-modal-inner" style="background:var(--bg);border-radius:20px 20px 0 0;width:100%;max-width:520px;max-height:92dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:20px 18px 40px">'
+  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML = '<div id="pk-modal-inner" style="background:var(--bg);border-radius:20px;width:100%;max-width:520px;max-height:90dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:20px 18px 28px">'
     + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">'
       + '<div>'
         + '<div style="font-size:1rem;font-weight:800;color:var(--text)">Catat Pemakaian Produksi</div>'
@@ -4010,7 +4010,7 @@ window.pkRemoveItem = function(idx) {
   pkRenderItems();
 };
 window.pkAddHasil = function() {
-  _pkHasilItems.push({ nama: 'Dimsum Original', qty: 0 });
+  _pkHasilItems.push({ nama: '', qty: 1 });
   pkRenderHasil();
 };
 window.pkRemoveHasil = function(idx) {
@@ -4018,51 +4018,93 @@ window.pkRemoveHasil = function(idx) {
   pkRenderHasil();
 };
 window.pkUpdateItem = function(idx, field, val) {
-  if (_pkItems[idx]) _pkItems[idx][field] = val;
-  if (field === 'nama' || field === 'qty') pkRenderItems();
+  if (!_pkItems[idx]) return;
+  _pkItems[idx][field] = val;
+  // Saat bahan dipilih, auto-ambil satuan dari data stok gudang
+  if (field === 'nama') {
+    var gudangItems = _stokGudang[_pkCabang] || {};
+    var stokData = gudangItems[val];
+    // Coba ambil satuan dari data BB jika tersimpan
+    if (typeof _bbSatuanMap === 'object' && _bbSatuanMap[_pkCabang] && _bbSatuanMap[_pkCabang][val]) {
+      _pkItems[idx].satuan = _bbSatuanMap[_pkCabang][val];
+    }
+    _pkItems[idx].qty = _pkItems[idx].qty || 1;
+  }
+  pkRenderItems();
 };
 window.pkUpdateHasil = function(idx, field, val) {
-  if (_pkHasilItems[idx]) _pkHasilItems[idx][field] = (field==='qty') ? parseInt(val)||0 : val;
+  if (!_pkHasilItems[idx]) return;
+  _pkHasilItems[idx][field] = (field==='qty') ? parseInt(val)||0 : val;
+  if (field === 'qty') pkUpdateHasilTotal();
 };
 
 window.pkRenderItems = function() {
   var wrap = document.getElementById('pk-items-wrap-v140');
   if (!wrap) return;
   var gudangItems = _stokGudang[_pkCabang] || {};
-  var namaList = Object.keys(gudangItems).filter(function(k){ return (gudangItems[k]||0) > 0; });
-  var bbSat = typeof BB_SATUAN !== 'undefined' ? BB_SATUAN : ['kg','gram','liter','ml','botol','kaleng','karung','pcs','pack','ikat','lainnya'];
+  // Ambil daftar bahan yang ada di gudang (stok >= 0 semua ditampilkan, habis diberi label)
+  var namaList = Object.keys(gudangItems);
   var _escR = typeof _esc === 'function' ? _esc : function(s){return String(s);};
 
+  // Jika tidak ada bahan di gudang sama sekali, tampilkan info
+  if (!namaList.length) {
+    wrap.innerHTML = '<div style="background:rgba(234,179,8,.08);border:1.5px solid rgba(234,179,8,.4);border-radius:12px;padding:14px;text-align:center;margin-bottom:10px">'
+      + '<div style="font-size:.82rem;font-weight:700;color:#92400e">Gudang masih kosong</div>'
+      + '<div style="font-size:.72rem;color:#78350f;margin-top:3px">Catat pembelian bahan baku terlebih dahulu agar stok tersedia</div>'
+      + '</div>';
+    return;
+  }
+
   wrap.innerHTML = _pkItems.map(function(item, i) {
-    var stokCurr = _sgGet(_pkCabang, item.nama || '');
-    var isOver = item.nama && (item.qty||0) > stokCurr && stokCurr > 0;
-    var satuanOpts = bbSat.map(function(s){ return '<option value="'+s+'"'+(item.satuan===s?' selected':'')+'>'+s+'</option>'; }).join('');
-    return '<div style="background:var(--bg2);border:1.5px solid '+(isOver?'#fca5a5':'var(--border2)')+';border-radius:12px;padding:12px;margin-bottom:10px">'
+    var stokCurr = item.nama ? _sgGet(_pkCabang, item.nama) : 0;
+    var isOver   = item.nama && (item.qty||0) > stokCurr && stokCurr > 0;
+    var isEmpty  = item.nama && stokCurr <= 0;
+    var borderColor = isOver ? '#fca5a5' : isEmpty ? '#fcd34d' : 'var(--border2)';
+
+    // Dropdown pilih bahan dari stok gudang
+    var bahanOpts = '<option value="">— Pilih Bahan —</option>'
+      + namaList.map(function(n){
+          var stok = gudangItems[n] || 0;
+          var label = n + (stok <= 0 ? ' (habis)' : ' — sisa ' + stok.toLocaleString('id-ID'));
+          return '<option value="'+_escR(n)+'"'+(item.nama===n?' selected':'')+(stok<=0?' disabled':'')+'>'+label+'</option>';
+        }).join('');
+
+    return '<div style="background:var(--bg2);border:1.5px solid '+borderColor+';border-radius:12px;padding:12px;margin-bottom:10px">'
+      // header row
       + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">'
         + '<span style="font-size:.7rem;font-weight:700;color:var(--text3)">Bahan ' + (i+1) + '</span>'
-        + (_pkItems.length > 1 ? '<button onclick="pkRemoveItem('+i+')" style="width:22px;height:22px;border:none;background:rgba(220,38,38,.1);border-radius:5px;cursor:pointer;color:#dc2626;font-size:.75rem">✕</button>' : '')
+        + (_pkItems.length > 1 ? '<button onclick="pkRemoveItem('+i+')" style="width:24px;height:24px;border:none;background:rgba(220,38,38,.1);border-radius:6px;cursor:pointer;color:#dc2626;font-size:.75rem;display:flex;align-items:center;justify-content:center">✕</button>' : '')
       + '</div>'
-      + '<input type="text" value="'+_escR(item.nama||'')+'" list="pk-bahan-datalist-v140" oninput="pkUpdateItem('+i+',\'nama\',this.value)" placeholder="Nama bahan (cth: Tepung, Ayam)" style="width:100%;padding:9px 11px;border:1.5px solid var(--border2);border-radius:9px;background:var(--bg);color:var(--text);font-size:.85rem;font-family:inherit;outline:none;box-sizing:border-box;margin-bottom:7px">'
-      + (item.nama && gudangItems[item.nama] !== undefined
-          ? '<div style="font-size:.68rem;color:'+(isOver?'#dc2626':'#16a34a')+';margin-bottom:6px;font-weight:600">📦 Stok gudang: '+stokCurr.toLocaleString('id-ID')+' '+(item.satuan||'')+(isOver?' — melebihi stok!':'')+' </div>'
+      // Pilih bahan — dropdown
+      + '<div style="position:relative;margin-bottom:8px">'
+        + '<select onchange="pkUpdateItem('+i+',\'nama\',this.value)" style="width:100%;padding:10px 32px 10px 12px;border:1.5px solid var(--border2);border-radius:10px;background:var(--bg);color:var(--text);font-size:.85rem;font-family:inherit;outline:none;box-sizing:border-box;appearance:none;-webkit-appearance:none;font-weight:600">'+bahanOpts+'</select>'
+        + '<svg style="position:absolute;right:10px;top:50%;transform:translateY(-50%);pointer-events:none" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" stroke-width="2.5" width="11" height="11"><polyline points="6,9 12,15 18,9"/></svg>'
+      + '</div>'
+      // Info stok
+      + (item.nama
+          ? '<div style="font-size:.68rem;font-weight:600;margin-bottom:8px;color:'+(isOver?'#dc2626':isEmpty?'#d97706':'#16a34a')+'">'
+            + (isEmpty ? '⚠️ Stok habis — tidak bisa dipakai'
+               : '📦 Stok tersedia: ' + stokCurr.toLocaleString('id-ID') + (isOver ? ' — <b>melebihi stok!</b>' : ''))
+            + '</div>'
           : '')
-      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'
-        + '<div><label style="font-size:.6rem;color:var(--text3);display:block;margin-bottom:3px">Jumlah Dipakai</label>'
-          + '<input type="number" value="'+(item.qty||0)+'" min="0.01" step="0.01" oninput="pkUpdateItem('+i+',\'qty\',parseFloat(this.value)||0)" style="width:100%;padding:9px 11px;border:1.5px solid var(--border2);border-radius:9px;background:var(--bg);color:var(--text);font-size:.85rem;font-family:inherit;outline:none;box-sizing:border-box"></div>'
-        + '<div><label style="font-size:.6rem;color:var(--text3);display:block;margin-bottom:3px">Satuan</label>'
-          + '<select oninput="pkUpdateItem('+i+',\'satuan\',this.value)" style="width:100%;padding:9px 11px;border:1.5px solid var(--border2);border-radius:9px;background:var(--bg);color:var(--text);font-size:.85rem;font-family:inherit;outline:none;box-sizing:border-box">'+satuanOpts+'</select></div>'
+      // Jumlah Dipakai — ± button
+      + '<label style="font-size:.6rem;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:5px">Jumlah Dipakai</label>'
+      + '<div style="display:flex;align-items:center;gap:6px;border:1.5px solid var(--border2);border-radius:10px;background:var(--bg);overflow:hidden;height:44px;padding:4px;box-sizing:border-box">'
+        + '<button onclick="pkQtyChange('+i+',-1)" style="width:36px;height:36px;border:none;border-radius:8px;background:var(--bg2);font-size:1.1rem;font-weight:700;cursor:pointer;color:var(--text2);flex-shrink:0;display:flex;align-items:center;justify-content:center">−</button>'
+        + '<input id="pk-qty-'+i+'" type="number" min="0.01" step="0.01" value="'+(item.qty||1)+'" oninput="_pkItems['+i+'].qty=parseFloat(this.value)||0" style="flex:1;min-width:0;text-align:center;border:none;background:transparent;font-size:.95rem;font-weight:800;color:var(--red,#dc2626);padding:0;outline:none;font-family:inherit;-moz-appearance:textfield">'
+        + '<button onclick="pkQtyChange('+i+',1)" style="width:36px;height:36px;border:none;border-radius:8px;background:rgba(220,38,38,.12);font-size:1.1rem;font-weight:700;cursor:pointer;color:var(--red,#dc2626);flex-shrink:0;display:flex;align-items:center;justify-content:center">+</button>'
       + '</div>'
       + '</div>';
   }).join('');
+};
 
-  // Datalist autocomplete
-  var dl = document.getElementById('pk-bahan-datalist-v140');
-  if (!dl) {
-    dl = document.createElement('datalist');
-    dl.id = 'pk-bahan-datalist-v140';
-    document.body.appendChild(dl);
-  }
-  dl.innerHTML = namaList.map(function(n){ return '<option value="'+n+'">'; }).join('');
+// ── Helper ± qty pemakaian ──
+window.pkQtyChange = function(idx, delta) {
+  var it = _pkItems[idx];
+  if (!it) return;
+  it.qty = Math.max(0.01, ((parseFloat(it.qty)||0) + delta));
+  var inp = document.getElementById('pk-qty-'+idx);
+  if (inp) inp.value = it.qty;
 };
 
 window.pkRenderHasil = function() {
@@ -4070,19 +4112,44 @@ window.pkRenderHasil = function() {
   if (!wrap) return;
   if (!_pkHasilItems.length) {
     wrap.innerHTML = '<div style="font-size:.75rem;color:var(--text4);padding:6px 0 8px">Opsional — isi jika ingin catat hasil dimsum</div>';
+    pkUpdateHasilTotal();
     return;
   }
   wrap.innerHTML = _pkHasilItems.map(function(h, i) {
-    return '<div style="display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:8px;align-items:end">'
-      + '<div><label style="font-size:.6rem;color:var(--text3);display:block;margin-bottom:3px">Produk Dimsum</label>'
-        + '<input type="text" value="'+(h.nama||'')+'" oninput="pkUpdateHasil('+i+',\'nama\',this.value)" placeholder="cth: Dimsum Ayam" style="width:100%;padding:9px 11px;border:1.5px solid var(--border2);border-radius:9px;background:var(--bg);color:var(--text);font-size:.85rem;font-family:inherit;outline:none;box-sizing:border-box"></div>'
-      + '<div style="display:flex;align-items:flex-end;gap:4px">'
-        + '<div><label style="font-size:.6rem;color:var(--text3);display:block;margin-bottom:3px">Pcs</label>'
-          + '<input type="number" value="'+(h.qty||0)+'" min="0" oninput="pkUpdateHasil('+i+',\'qty\',this.value)" style="width:65px;padding:9px 8px;border:1.5px solid var(--border2);border-radius:9px;background:var(--bg);color:var(--text);font-size:.85rem;font-family:inherit;outline:none;text-align:center"></div>'
-        + '<button onclick="pkRemoveHasil('+i+')" style="width:32px;height:38px;border:none;background:rgba(220,38,38,.1);border-radius:9px;cursor:pointer;color:#dc2626;font-size:.85rem;flex-shrink:0;margin-bottom:0">✕</button>'
+    return '<div style="background:var(--bg2);border:1.5px solid var(--border2);border-radius:12px;padding:11px 12px;margin-bottom:8px">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">'
+        + '<span style="font-size:.65rem;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em">Produk ' + (i+1) + '</span>'
+        + '<button onclick="pkRemoveHasil('+i+')" style="width:22px;height:22px;border:none;background:rgba(220,38,38,.1);border-radius:6px;cursor:pointer;color:#dc2626;font-size:.7rem;display:flex;align-items:center;justify-content:center">✕</button>'
+      + '</div>'
+      // Input nama produk
+      + '<input type="text" value="'+(h.nama||'')+'" oninput="pkUpdateHasil('+i+',\'nama\',this.value)" placeholder="cth: Dimsum Ayam Original" style="width:100%;padding:9px 12px;border:1.5px solid var(--border2);border-radius:9px;background:var(--bg);color:var(--text);font-size:.85rem;font-family:inherit;outline:none;box-sizing:border-box;margin-bottom:8px;font-weight:600">'
+      // Qty ± button
+      + '<label style="font-size:.6rem;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:5px">Jumlah (pcs)</label>'
+      + '<div style="display:flex;align-items:center;gap:6px;border:1.5px solid var(--border2);border-radius:10px;background:var(--bg);overflow:hidden;height:44px;padding:4px;box-sizing:border-box">'
+        + '<button onclick="pkHasilQtyChange('+i+',-1)" style="width:36px;height:36px;border:none;border-radius:8px;background:var(--bg2);font-size:1.1rem;font-weight:700;cursor:pointer;color:var(--text2);flex-shrink:0;display:flex;align-items:center;justify-content:center">−</button>'
+        + '<input id="pk-hasil-qty-'+i+'" type="number" min="0" step="1" value="'+(h.qty||0)+'" oninput="pkUpdateHasil('+i+',\'qty\',this.value)" style="flex:1;min-width:0;text-align:center;border:none;background:transparent;font-size:1.1rem;font-weight:800;color:var(--green,#16a34a);padding:0;outline:none;font-family:inherit;-moz-appearance:textfield">'
+        + '<button onclick="pkHasilQtyChange('+i+',1)" style="width:36px;height:36px;border:none;border-radius:8px;background:rgba(22,163,74,.12);font-size:1.1rem;font-weight:700;cursor:pointer;color:var(--green,#16a34a);flex-shrink:0;display:flex;align-items:center;justify-content:center">+</button>'
       + '</div>'
       + '</div>';
   }).join('');
+  pkUpdateHasilTotal();
+};
+
+// ── Helper ± qty hasil produksi ──
+window.pkHasilQtyChange = function(idx, delta) {
+  var it = _pkHasilItems[idx];
+  if (!it) return;
+  it.qty = Math.max(0, ((parseInt(it.qty)||0) + delta));
+  var inp = document.getElementById('pk-hasil-qty-'+idx);
+  if (inp) inp.value = it.qty;
+  pkUpdateHasilTotal();
+};
+
+// ── Update total pcs di footer modal ──
+window.pkUpdateHasilTotal = function() {
+  var total = _pkHasilItems.reduce(function(s,it){ return s+(parseInt(it.qty)||0); }, 0);
+  var totEl = document.getElementById('pk-total-dimsum-v140');
+  if (totEl) totEl.textContent = total.toLocaleString('id-ID') + ' pcs';
 };
 
 window.pkSave = async function() {

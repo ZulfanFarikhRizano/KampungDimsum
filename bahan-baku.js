@@ -676,7 +676,7 @@ function bbTandaiProduksi(bbId){
 function bbTandaiProduksiOpen(rec){
   var bbId = rec.id;
   _bbProdCurrentId = bbId;
-  _bbProdItems = [{ nama: 'Dimsum Original', qty: 0 }];
+  _bbProdItems = [{ nama: 'Dimsum Original', qty: 1 }];
 
   // Subtitle
   var el = document.getElementById('bb-prod-subtitle');
@@ -720,7 +720,7 @@ function bbProduksiClose(){
 
 /* ─── Tambah/hapus item hasil produksi ─── */
 function bbProdAddItem(){
-  _bbProdItems.push({ nama: 'Dimsum Original', qty: 0 });
+  _bbProdItems.push({ nama: 'Dimsum Original', qty: 1 });
   bbProdRenderItems();
 }
 function bbProdRemoveItem(idx){
@@ -759,6 +759,13 @@ function bbProdRenderItems(){
 
   // Update total
   var total = _bbProdItems.reduce(function(s,it){ return s+(it.qty||0); }, 0);
+  var totEl = document.getElementById('bb-prod-total-dimsum');
+  if(totEl) totEl.textContent = total.toLocaleString('id-ID') + ' pcs';
+}
+
+/* ─── Update total dimsum tanpa re-render full ─── */
+function bbProdUpdateTotal(){
+  var total = _bbProdItems.reduce(function(s,it){ return s+(parseInt(it.qty)||0); }, 0);
   var totEl = document.getElementById('bb-prod-total-dimsum');
   if(totEl) totEl.textContent = total.toLocaleString('id-ID') + ' pcs';
 }
