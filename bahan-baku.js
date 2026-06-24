@@ -823,7 +823,7 @@ function bbProduksiSave(){
       catatan: prodRecord.catatan,
       selesai_oleh: prodRecord.selesai_oleh,
       bahan_dipakai: JSON.stringify(bahanDipakai)
-    }]).then(function(res){
+    }]).select().then(function(res){
       if(res.error){
         prodRecord.id = Date.now();
         _lpData.unshift(prodRecord);
@@ -834,18 +834,30 @@ function bbProduksiSave(){
         } else {
           showToast('⚠️ Gagal simpan ke database: '+errMsg,'warning');
         }
+        sb.from('bahan_baku').update({ status: 'selesai', produksi_id: prodRecord.id }).eq('id', rec.id).then(function(){});
+        rec.status = 'selesai';
+        rec.produksi_id = prodRecord.id;
+        _bbSaveLocal();
+        bbProduksiClose();
+        bbRenderTable();
+        lpRender();
       } else {
-        _lpData.unshift(prodRecord);
-        _lpSaveLocal();
+        // FIX v140: ambil id dari Supabase response agar total_dimsum & laporan ter-update benar
+        if(res.data && res.data[0] && res.data[0].id){
+          prodRecord.id = res.data[0].id;
+        } else {
+          prodRecord.id = Date.now();
+        }
+        sb.from('bahan_baku').update({ status: 'selesai', produksi_id: prodRecord.id }).eq('id', rec.id).then(function(){});
+        rec.status = 'selesai';
+        rec.produksi_id = prodRecord.id;
+        _bbSaveLocal();
+        bbProduksiClose();
+        bbRenderTable();
         showToast('✅ Produksi berhasil dicatat!','success');
+        // Reload data produksi dari Supabase agar total_dimsum di laporan akurat
+        _lpLoadData();
       }
-      sb.from('bahan_baku').update({ status: 'selesai', produksi_id: prodRecord.id }).eq('id', rec.id).then(function(){});
-      rec.status = 'selesai';
-      rec.produksi_id = prodRecord.id;
-      _bbSaveLocal();
-      bbProduksiClose();
-      bbRenderTable();
-      lpRender();
     });
   } else {
     prodRecord.id = Date.now();
